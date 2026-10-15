@@ -1,24 +1,37 @@
 module.exports = {
     name: 'ping',
-    description: 'Ultra fast instant ping',
+    description: 'Instant ultra-fast ping',
     execute: async (sock, msg, args) => {
-        const jid = msg.key.remoteJid;
-        
-        // Exact hardware execution latency
-        const startTime = Date.now();
-        
-        // Non-blocking fire-and-forget React (🔥)
-        sock.sendMessage(jid, {
-            react: { text: '🔥', key: msg.key }
-        }).catch(() => {});
+        try {
+            const jid = msg.key.remoteJid;
+            const start = Date.now();
 
-        // Calculation of latency
-        const latency = Date.now() - startTime;
-        const finalLatency = latency < 1 ? 1 : latency;
+            // 1. Send React 🔥
+            sock.sendMessage(jid, {
+                react: { 
+                    text: '🔥', 
+                    key: msg.key 
+                }
+            }).catch(() => {});
 
-        // Instant text message dispatch
-        await sock.sendMessage(jid, {
-            text: `\`\`\`Pong ${finalLatency}ms 🚀\`\`\``
-        });
+            // 2. Real Latency Calculation
+            const msgTime = msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : start;
+            let latency = Date.now() - msgTime;
+
+            if (isNaN(latency) || latency < 0) {
+                latency = Date.now() - start;
+            }
+            if (latency === 0) latency = 1;
+
+            // 3. Send Text Message (Always quoted with fallback)
+            await sock.sendMessage(jid, {
+                text: `\`\`\`Pong ${latency}ms 🚀\`\`\``
+            }, { 
+                quoted: msg 
+            });
+
+        } catch (err) {
+            console.error('Ping command error:', err);
+        }
     }
 };
