@@ -1,34 +1,13 @@
-const fs = require('fs');
-const path = require('path');
+const { askHeshan } = require('./ai');
 
-const commands = new Map();
-
-function loadCommands() {
-    commands.clear();
-    const cmdDir = path.join(__dirname, 'commands');
-    if (!fs.existsSync(cmdDir)) return;
-
-    const commandFiles = fs.readdirSync(cmdDir).filter(f => f.endsWith('.js'));
-    for (const file of commandFiles) {
-        try {
-            const cmd = require(`./commands/${file}`);
-            if (cmd.name) {
-                commands.set(cmd.name.toLowerCase(), cmd);
-            }
-        } catch (e) {}
-    }
-}
-
-function handleMessage(sock, msgUpdate) {
+async function handleMessage(sock, msgUpdate) {
     try {
         const msg = msgUpdate.messages?.[0];
         if (!msg || !msg.message) return;
 
-        // Status updates සම්පූර්ණයෙන්ම skip කිරීම (Max Speed)
         const jid = msg.key.remoteJid;
         if (jid === 'status@broadcast') return;
 
-        // Fastest direct text extraction without deep loops
         const m = msg.message;
         const text = m.conversation || 
                      m.extendedTextMessage?.text || 
@@ -36,22 +15,56 @@ function handleMessage(sock, msgUpdate) {
                      m.videoMessage?.caption || 
                      (m.ephemeralMessage?.message?.conversation || m.ephemeralMessage?.message?.extendedTextMessage?.text) || '';
 
-        if (!text) return;
+        if (!text || text.trim() === '') return;
 
+        const isGroup = jid.endsWith('@g.us');
+        const lowerText = text.toLowerCase().trim();
         const prefix = global.BOT_PREFIX || '.';
-        if (text[0] !== prefix) return;
 
-        const clean = text.slice(prefix.length).trim();
-        const spaceIdx = clean.indexOf(' ');
-        const commandName = (spaceIdx === -1 ? clean : clean.slice(0, spaceIdx)).toLowerCase();
-        const args = spaceIdx === -1 ? [] : clean.slice(spaceIdx + 1).split(/\s+/);
+        // Calculate live latency
+        const now = Date.now();
+        const msgTime = msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : now;
+        let latency = now - msgTime;
+        if (isNaN(latency) || latency < 0) latency = 5;
+        if (latency === 0) latency = 1;
 
-        const command = commands.get(commandName);
-        if (command) {
-            // Execution with internal timing
-            command.execute(sock, msg, args);
+        // 1. Classical .ping command fallback
+        if (lowerText === `${prefix}ping` || lowerText === 'ping') {
+            await sock.sendMessage(jid, { react: { text: '🔥', key: msg.key } }).catch(() => {});
+            return await sock.sendMessage(jid, { text: `\`\`\`Pong ${latency}ms 🚀\`\`\`` });
         }
+
+        // 2. Determine if AI should reply (Strict spam protection)
+        let shouldReply = false;
+
+        if (!isGroup) {
+            // In private chat: Reply to everything
+            shouldReply = true;
+        } else {
+            // In groups: Only reply if mentioned by name "Heshan" OR bot's message is quoted
+            const myJid = sock.user?.id ? sock.user.id.split(':')[0] : '';
+            const isQuotedMe = m.extendedTextMessage?.contextInfo?.participant?.includes(myJid);
+            const mentionsHeshan = lowerText.includes('heshan');
+
+            if (isQuotedMe || mentionsHeshan) {
+                shouldReply = true;
+            }
+        }
+
+        if (!shouldReply) return;
+
+        // Visual Reaction to acknowledge receipt
+        sock.sendMessage(jid, { react: { text: '⚡', key: msg.key } }).catch(() => {});
+
+        // Direct AI Inference via OpenRouter
+        const aiResponse = await askHeshan(text, { latency });
+
+        // Send AI Response
+        await sock.sendMessage(jid, {
+            text: aiResponse
+        });
+
     } catch (err) {}
 }
 
-module.exports = { loadCommands, handleMessage, commands };
+module.exports = { handleMessage };
