@@ -94,6 +94,7 @@ const PORT = process.env.PORT || config.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Web server listening on port ${PORT}`);
     
+    // Auto Keep-Alive every 5 mins to prevent Render Sleep
     setInterval(() => {
         try {
             https.get(`https://heshan-zh7a.onrender.com/ping-server`, () => {});
@@ -104,7 +105,8 @@ app.listen(PORT, () => {
 function setupMessageListener(activeSock) {
     activeSock.ev.on('messages.upsert', async (msgUpdate) => {
         try {
-            for (const m of msgUpdate.messages || []) {
+            const messages = msgUpdate.messages || [];
+            for (const m of messages) {
                 if (m.key?.id && m.message) {
                     messageStore.set(m.key.id, m.message);
                     if (messageStore.size > 500) {
@@ -112,8 +114,9 @@ function setupMessageListener(activeSock) {
                         messageStore.delete(oldestKey);
                     }
                 }
+                // Call handler directly per message
+                await handleMessage(activeSock, m);
             }
-            await handleMessage(activeSock, msgUpdate);
         } catch (e) {
             console.error('Upsert Listener Error:', e);
         }
