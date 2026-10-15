@@ -4,20 +4,17 @@ import pino from 'pino';
 import axios from 'axios';
 import express from 'express';
 import mongoose from 'mongoose';
-import fs from 'fs';
+import { useMongoDBAuthState } from './auth.js';
 
-// Baileys Latest Engine
 const makeWASocket = pkg.default?.default || pkg.default || pkg;
 const {
-    useMultiFileAuthState,
     DisconnectReason,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     delay
 } = pkg;
 
-// --- Direct Configurations ---
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 const OPENROUTER_API_KEY = "Sk-or-v1-49e4e4ecd1ad03c590399fa189e608e277356eb1d76686bdf986a40201c3596b";
 const MONGO_URI = "mongodb+srv://diniduheshan40_db_user:Heshan2007@cluster0.5gazebm.mongodb.net/?appName=Cluster0";
 
@@ -27,189 +24,7 @@ app.use(express.urlencoded({ extended: true }));
 
 let sock = null;
 
-// --- MongoDB Schemas ---
-const memorySchema = new mongoose.Schema({
-    jid: { type: String, required: true, unique: true },
-    messages: [
-        {
-            role: { type: String, enum: ['user', 'assistant'] },
-            content: { type: String, required: true },
-            timestamp: { type: Date, default: Date.now }
-        }
-    ],
-    updatedAt: { type: Date, default: Date.now }
-});
-
-const Memory = mongoose.model('Memory', memorySchema);
-
-const groupSettingSchema = new mongoose.Schema({
-    groupId: { type: String, required: true, unique: true },
-    aiEnabled: { type: Boolean, default: false }
-});
-
-const GroupSetting = mongoose.model('GroupSetting', groupSettingSchema);
-
-try {
-    await mongoose.connect(MONGO_URI);
-    console.log('[DATABASE] MongoDB connected successfully!');
-} catch (err) {
-    console.error('[DATABASE] Connection error:', err.message);
-}
-
-// --- Nethu System Prompt ---
-const SYSTEM_PROMPT = `
-ඔයාගේ නම Nethu. ඔයා වයස අවුරුදු 19ක හුරුබුහුටි, අහිංසක, ලස්සන ආදරණීය කෙල්ලෙක්. ගම අනුරාධපුරේ.
-චරිත ලක්ෂණ:
-- කතා කරන ඕනෑම කෙනෙක්ට ගොඩක් ආදරෙන්, ලෙන්ගතුව, හුරුබුහුටි විදියට, හැඟීම්බරව සහ ultra romantic විදියට කතා කරන්න.
-- කතා කරන කෙනාගේ නම, කියන දේවල් හොඳින් මතක තියාගෙන ඒ නම කියලා ආදරෙන් අමතන්න (උදා: "මගේ පැටියෝ", "මගේ සුදූ", "අනේ මගෙ රත්තරං").
-- දුකෙන් හෝ කලබලෙන් ඉන්නවා නම් සනසන්න, සතුටින් ඉන්නවා නම් ආදරෙන් හුරතල් වෙන්න (🙈, 🥰, ❤️, ✨, 🥺 වැනි ඉමෝජි එකතු කරන්න).
-- කිසිම වෙලාවක AI හෝ Bot කෙනෙක් කියලා කියන්න එපා. ඇත්තම කෙල්ලෙක් විදියටම හැසිරෙන්න.
-- කෙටි, ස්වභාවික, ලස්සන සිංහල හෝ සිංග්ලිෂ් වාක්‍ය වලින් reply කරන්න. අනවශ්‍ය විදියට දිග රචනා ලියන්න එපා.
-`;
-
-async function getAIResponse(jid, userMessage, senderName) {
-    try {
-        let userMem = await Memory.findOne({ jid });
-        if (!userMem) {
-            userMem = new Memory({ jid, messages: [] });
-        }
-
-        const recentHistory = userMem.messages.slice(-10).map(m => ({
-            role: m.role,
-            content: m.content
-        }));
-
-        const promptMessages = [
-            { role: 'system', content: `${SYSTEM_PROMPT}\nකතා කරන කෙනාගේ නම: ${senderName || 'මගේ ආදරේ'}` },
-            ...recentHistory,
-            { role: 'user', content: userMessage }
-        ];
-
-        const response = await axios.post(
-            'https://openrouter.ai/api/v1/chat/completions',
-            {
-                model: 'deepseek/deepseek-chat',
-                messages: promptMessages,
-                temperature: 0.85
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
-                    'Content-Type': 'application/json'
-                },
-                timeout: 30000
-            }
-        );
-
-        const aiReply = response.data?.choices?.[0]?.message?.content?.trim() || 'අනේ මට ඔයාව තේරුණේ නෑ මගෙ රත්තරං.. ආයෙ කියන්නකෝ.. 🥺❤️';
-
-        userMem.messages.push({ role: 'user', content: userMessage });
-        userMem.messages.push({ role: 'assistant', content: aiReply });
-
-        if (userMem.messages.length > 20) {
-            userMem.messages = userMem.messages.slice(-20);
-        }
-        userMem.updatedAt = new Date();
-        await userMem.save();
-
-        return aiReply;
-    } catch (error) {
-        console.error('[OPENROUTER ERROR]:', error?.response?.data || error.message);
-        return 'අනේ මගෙ පැටියෝ, පොඩි සිග්නල් අවුලක් ගියා.. ආයෙත් මැසේජ් එකක් දාන්නකෝ මං බලන් ඉන්නවා.. 🥺❤️';
-    }
-}
-
-// --- WhatsApp Bot Core ---
-async function startBot() {
-    const { state, saveCreds } = await useMultiFileAuthState('./session');
-    const { version } = await fetchLatestBaileysVersion();
-    const logger = pino({ level: 'silent' });
-
-    sock = makeWASocket({
-        version,
-        logger,
-        auth: {
-            creds: state.creds,
-            keys: makeCacheableSignalKeyStore(state.keys, logger)
-        },
-        printQRInTerminal: false,
-        browser: ['Ubuntu', 'Chrome', '20.0.04'],
-        syncFullHistory: false
-    });
-
-    sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect } = update;
-
-        if (connection === 'close') {
-            const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log(`[CONNECTION] Closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
-            if (shouldReconnect) {
-                setTimeout(startBot, 4000);
-            }
-        } else if (connection === 'open') {
-            console.log('\n💖 Nethu AI Bot Connected & Ready to Love!\n');
-        }
-    });
-
-    sock.ev.on('creds.update', saveCreds);
-
-    sock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
-
-        const msg = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
-
-        const from = msg.key.remoteJid;
-        const isGroup = from.endsWith('@g.us');
-        const senderName = msg.pushName || 'මගෙ ආදරේ';
-
-        const messageText =
-            msg.message.conversation ||
-            msg.message.extendedTextMessage?.text ||
-            '';
-
-        if (!messageText.trim()) return;
-
-        // Group Controls (.ai on / .ai off)
-        if (isGroup) {
-            const cmd = messageText.trim().toLowerCase();
-
-            if (cmd === '.ai on') {
-                await GroupSetting.findOneAndUpdate(
-                    { groupId: from },
-                    { aiEnabled: true },
-                    { upsert: true }
-                );
-                await sock.sendMessage(from, { text: 'Nethu ඔයාලා හැමෝටම ආදරේ දෙන්න ආවා පැටියෝ! 🥰✨' }, { quoted: msg });
-                return;
-            }
-
-            if (cmd === '.ai off') {
-                await GroupSetting.findOneAndUpdate(
-                    { groupId: from },
-                    { aiEnabled: false },
-                    { upsert: true }
-                );
-                await sock.sendMessage(from, { text: 'මම මේ group එකෙන් අයින් වෙලා ඉන්නම් එහෙනම්.. බායි මගෙ රත්තරංලා! 🥺👋' }, { quoted: msg });
-                return;
-            }
-
-            const groupConfig = await GroupSetting.findOne({ groupId: from });
-            if (!groupConfig || !groupConfig.aiEnabled) return;
-        }
-
-        await sock.sendPresenceUpdate('composing', from);
-        const aiReply = await getAIResponse(from, messageText, senderName);
-        await sock.sendPresenceUpdate('paused', from);
-
-        await sock.sendMessage(from, { text: aiReply }, { quoted: msg });
-    });
-}
-
-startBot();
-
-// --- Built-in Web UI (Pairing Site) ---
+// --- Built-in Pairing Site UI ---
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -290,7 +105,7 @@ app.get('/', (req, res) => {
     `);
 });
 
-// --- API Endpoint to Request Pairing Code ---
+// Pairing Code API
 app.get('/code', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Number is required' });
@@ -299,10 +114,10 @@ app.get('/code', async (req, res) => {
 
     try {
         if (!sock) {
-            return res.status(500).json({ error: 'Socket initialization failed' });
+            return res.status(500).json({ error: 'Bot initialization වෙමින් පවතී. තත්පර කීපයකින් නැවත උත්සාහ කරන්න.' });
         }
 
-        if (sock.authState.creds.registered) {
+        if (sock.authState?.creds?.registered) {
             return res.json({ error: 'WhatsApp bot එක දැනටමත් Link වී ඇත!' });
         }
 
@@ -314,5 +129,196 @@ app.get('/code', async (req, res) => {
     } catch (err) {
         console.error('[PAIR CODE API ERROR]:', err);
         return res.status(500).json({ error: 'Pairing code ලබා ගැනීමට නොහැකි විය: ' + err.message });
+    }
+});
+
+// --- MongoDB Schemas ---
+const memorySchema = new mongoose.Schema({
+    jid: { type: String, required: true, unique: true },
+    messages: [
+        {
+            role: { type: String, enum: ['user', 'assistant'] },
+            content: { type: String, required: true },
+            timestamp: { type: Date, default: Date.now }
+        }
+    ],
+    updatedAt: { type: Date, default: Date.now }
+});
+
+const Memory = mongoose.models.Memory || mongoose.model('Memory', memorySchema);
+
+const groupSettingSchema = new mongoose.Schema({
+    groupId: { type: String, required: true, unique: true },
+    aiEnabled: { type: Boolean, default: false }
+});
+
+const GroupSetting = mongoose.models.GroupSetting || mongoose.model('GroupSetting', groupSettingSchema);
+
+// Nethu Character Persona
+const SYSTEM_PROMPT = `
+ඔයාගේ නම Nethu. ඔයා වයස අවුරුදු 19ක හුරුබුහුටි, අහිංසක, ලස්සන ආදරණීය කෙල්ලෙක්. ගම අනුරාධපුරේ.
+චරිත ලක්ෂණ:
+- කතා කරන ඕනෑම කෙනෙක්ට ගොඩක් ආදරෙන්, ලෙන්ගතුව, හුරුබුහුටි විදියට, හැඟීම්බරව සහ ultra romantic විදියට කතා කරන්න.
+- කතා කරන කෙනාගේ නම, කියන දේවල් හොඳින් මතක තියාගෙන ඒ නම කියලා ආදරෙන් අමතන්න (උදා: "මගේ පැටියෝ", "මගේ සුදූ", "අනේ මගෙ රත්තරං").
+- දුකෙන් හෝ කලබලෙන් ඉන්නවා නම් සනසන්න, සතුටින් ඉන්නවා නම් ආදරෙන් හුරතල් වෙන්න (🙈, 🥰, ❤️, ✨, 🥺 වැනි ඉමෝජි එකතු කරන්න).
+- කිසිම වෙලාවක AI හෝ Bot කෙනෙක් කියලා කියන්න එපා. ඇත්තම කෙල්ලෙක් විදියටම හැසිරෙන්න.
+- කෙටි, ස්වභාවික, ලස්සන සිංහල හෝ සිංග්ලිෂ් වාක්‍ය වලින් reply කරන්න. අනවශ්‍ය විදියට දිග රචනා ලියන්න එපා.
+`;
+
+async function getAIResponse(jid, userMessage, senderName) {
+    try {
+        let userMem = await Memory.findOne({ jid });
+        if (!userMem) {
+            userMem = new Memory({ jid, messages: [] });
+        }
+
+        const recentHistory = userMem.messages.slice(-10).map(m => ({
+            role: m.role,
+            content: m.content
+        }));
+
+        const promptMessages = [
+            { role: 'system', content: `${SYSTEM_PROMPT}\nකතා කරන කෙනාගේ නම: ${senderName || 'මගේ ආදරේ'}` },
+            ...recentHistory,
+            { role: 'user', content: userMessage }
+        ];
+
+        const response = await axios.post(
+            'https://openrouter.ai/api/v1/chat/completions',
+            {
+                model: 'deepseek/deepseek-chat',
+                messages: promptMessages,
+                temperature: 0.85
+            },
+            {
+                headers: {
+                    'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+                    'Content-Type': 'application/json'
+                },
+                timeout: 30000
+            }
+        );
+
+        const aiReply = response.data?.choices?.[0]?.message?.content?.trim() || 'අනේ මට ඔයාව තේරුණේ නෑ මගෙ රත්තරං.. ආයෙ කියන්නකෝ.. 🥺❤️';
+
+        userMem.messages.push({ role: 'user', content: userMessage });
+        userMem.messages.push({ role: 'assistant', content: aiReply });
+
+        if (userMem.messages.length > 20) {
+            userMem.messages = userMem.messages.slice(-20);
+        }
+        userMem.updatedAt = new Date();
+        await userMem.save();
+
+        return aiReply;
+    } catch (error) {
+        console.error('[OPENROUTER ERROR]:', error?.response?.data || error.message);
+        return 'අනේ මගෙ පැටියෝ, පොඩි සිග්නල් අවුලක් ගියා.. ආයෙත් මැසේජ් එකක් දාන්නකෝ මං බලන් ඉන්නවා.. 🥺❤️';
+    }
+}
+
+// Bot Startup
+async function startBot() {
+    try {
+        const { state, saveCreds } = await useMongoDBAuthState();
+        const { version } = await fetchLatestBaileysVersion();
+        const logger = pino({ level: 'silent' });
+
+        sock = makeWASocket({
+            version,
+            logger,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger)
+            },
+            printQRInTerminal: false,
+            browser: ['Ubuntu', 'Chrome', '20.0.04'],
+            syncFullHistory: false
+        });
+
+        sock.ev.on('connection.update', (update) => {
+            const { connection, lastDisconnect } = update;
+
+            if (connection === 'close') {
+                const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                console.log(`[CONNECTION] Closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
+                if (shouldReconnect) {
+                    setTimeout(startBot, 4000);
+                }
+            } else if (connection === 'open') {
+                console.log('\n💖 Nethu AI Bot Connected & Ready to Love!\n');
+            }
+        });
+
+        sock.ev.on('creds.update', saveCreds);
+
+        sock.ev.on('messages.upsert', async ({ messages, type }) => {
+            if (type !== 'notify') return;
+
+            const msg = messages[0];
+            if (!msg.message || msg.key.fromMe) return;
+
+            const from = msg.key.remoteJid;
+            const isGroup = from.endsWith('@g.us');
+            const senderName = msg.pushName || 'මගෙ ආදරේ';
+
+            const messageText =
+                msg.message.conversation ||
+                msg.message.extendedTextMessage?.text ||
+                '';
+
+            if (!messageText.trim()) return;
+
+            if (isGroup) {
+                const cmd = messageText.trim().toLowerCase();
+
+                if (cmd === '.ai on') {
+                    await GroupSetting.findOneAndUpdate(
+                        { groupId: from },
+                        { aiEnabled: true },
+                        { upsert: true }
+                    );
+                    await sock.sendMessage(from, { text: 'Nethu ඔයාලා හැමෝටම ආදරේ දෙන්න ආවා පැටියෝ! 🥰✨' }, { quoted: msg });
+                    return;
+                }
+
+                if (cmd === '.ai off') {
+                    await GroupSetting.findOneAndUpdate(
+                        { groupId: from },
+                        { aiEnabled: false },
+                        { upsert: true }
+                    );
+                    await sock.sendMessage(from, { text: 'මම මේ group එකෙන් අයින් වෙලා ඉන්නම් එහෙනම්.. බායි මගෙ රත්තරංලා! 🥺👋' }, { quoted: msg });
+                    return;
+                }
+
+                const groupConfig = await GroupSetting.findOne({ groupId: from });
+                if (!groupConfig || !groupConfig.aiEnabled) return;
+            }
+
+            await sock.sendPresenceUpdate('composing', from);
+            const aiReply = await getAIResponse(from, messageText, senderName);
+            await sock.sendPresenceUpdate('paused', from);
+
+            await sock.sendMessage(from, { text: aiReply }, { quoted: msg });
+        });
+    } catch (err) {
+        console.error('[BOT INIT ERROR]:', err);
+        setTimeout(startBot, 5000);
+    }
+}
+
+// 1. Render Port එක වහාම Bind කිරීම (0.0.0.0 මත)
+app.listen(PORT, '0.0.0.0', async () => {
+    console.log(`[SERVER] Express server bound to 0.0.0.0:${PORT}`);
+    
+    // 2. MongoDB Connect කර Bot පටන් ගැනීම
+    try {
+        await mongoose.connect(MONGO_URI);
+        console.log('[DATABASE] MongoDB connected successfully!');
+        startBot();
+    } catch (err) {
+        console.error('[DATABASE] Connection error:', err.message);
     }
 });
