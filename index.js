@@ -23,10 +23,10 @@ const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://diniduheshan40_db_user
 const SESSION_DIR = './session';
 const app = express();
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
 
 let sock = null;
 let isLinked = false;
+let isSocketReady = false;
 
 // --- Session Reset Utility ---
 function clearLocalSession() {
@@ -70,7 +70,6 @@ async function restoreSessionFromDB() {
             for (const [filename, content] of Object.entries(backup.sessionData)) {
                 fs.writeFileSync(path.join(SESSION_DIR, filename), content);
             }
-            console.log('[DATABASE] Previous session restored!');
             return true;
         }
     } catch (e) {
@@ -94,13 +93,12 @@ async function backupSessionToDB() {
             { sessionData },
             { upsert: true }
         );
-        console.log('[DATABASE] Session synced to MongoDB!');
     } catch (e) {
         console.error('[BACKUP ERROR]:', e.message);
     }
 }
 
-// --- Modern Web UI ---
+// --- Web UI ---
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -135,7 +133,7 @@ app.get('/', (req, res) => {
             <div class="box" id="box">
                 <span style="font-size: 11px; color: #8696a0;">PAIRING CODE</span>
                 <span class="code" id="codeText">-------</span>
-                <p class="status">කෝඩ් එක කොපි කරගෙන WhatsApp → Linked Devices → Link with phone number එකට ලබා දෙන්න.</p>
+                <p class="status">WhatsApp → Linked Devices → Link with phone number එකට ලබා දෙන්න.</p>
             </div>
         </div>
 
@@ -151,7 +149,7 @@ app.get('/', (req, res) => {
                     return;
                 }
 
-                btn.innerText = "Connecting Chrome & Generating...";
+                btn.innerText = "Requesting Code...";
                 btn.disabled = true;
 
                 try {
@@ -184,19 +182,32 @@ app.get('/', (req, res) => {
     `);
 });
 
-// --- Dynamic Pairing API (Chrome Browser Client) ---
+// --- Dynamic Pairing Endpoint ---
 app.get('/code', async (req, res) => {
     let num = req.query.number;
-    if (!num) return res.status(400).json({ error: 'Number required' });
+    if (!num) return res.status(400).json({ error: 'Number is required' });
     num = num.replace(/[^0-9]/g, '');
 
-    if (sock) {
-        try { sock.end(undefined); } catch (_) {}
-        sock = null;
+    if (!sock || !isSocketReady) {
+        return res.status(503).json({ error: 'WhatsApp socket එක තවමත් ready වෙමින් පවතී. තත්පර 5කින් නැවත උත්සාහ කරන්න.' });
     }
-    clearLocalSession();
-    await SessionBackup.deleteOne({ id: 'main_session' }).catch(() => {});
 
+    try {
+        if (!sock.authState.creds.registered) {
+            let code = await sock.requestPairingCode(num);
+            code = code?.match(/.{1,4}/g)?.join('-') || code;
+            return res.json({ code });
+        } else {
+            return res.json({ error: 'දැනටමත් Account එකකට Link වී ඇත.' });
+        }
+    } catch (err) {
+        console.error('[PAIRING ERROR]:', err);
+        return res.status(500).json({ error: 'Pairing failed: ' + err.message });
+    }
+});
+
+// --- WhatsApp Core Engine ---
+async function initWhatsAppEngine() {
     try {
         const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
         const { version } = await fetchLatestBaileysVersion();
@@ -210,11 +221,38 @@ app.get('/code', async (req, res) => {
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
             printQRInTerminal: false,
-            browser: ["Chrome (Linux)", "Chrome", "122.0.6261.112"],
+            browser: ["Ubuntu", "Chrome", "20.0.04"],
             syncFullHistory: false,
             connectTimeoutMs: 60000,
-            defaultQueryTimeoutMs: 0,
-            keepAliveIntervalMs: 10000
+            defaultQueryTimeoutMs: 0
+        });
+
+        sock.ev.on('connection.update', async (update) => {
+            const { connection, lastDisconnect, qr } = update;
+
+            if (qr || connection === 'connecting') {
+                isSocketReady = true;
+            }
+
+            if (connection === 'close') {
+                isLinked = false;
+                isSocketReady = false;
+                const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+                console.log(`[CONNECTION] Closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
+                
+                if (statusCode === DisconnectReason.loggedOut) {
+                    clearLocalSession();
+                    await SessionBackup.deleteOne({ id: 'main_session' }).catch(() => {});
+                }
+                
+                setTimeout(initWhatsAppEngine, 3000);
+            } else if (connection === 'open') {
+                isLinked = true;
+                isSocketReady = false;
+                console.log('\n💖 Nethu AI Bot Connected Successfully!\n');
+                await backupSessionToDB();
+            }
         });
 
         sock.ev.on('creds.update', async () => {
@@ -222,42 +260,43 @@ app.get('/code', async (req, res) => {
             await backupSessionToDB();
         });
 
-        setupConnectionListeners(sock);
+        sock.ev.on('messages.upsert', async ({ messages, type }) => {
+            if (type !== 'notify') return;
+            const msg = messages[0];
+            if (!msg.message || msg.key.fromMe) return;
 
-        let codeSent = false;
+            const from = msg.key.remoteJid;
+            const isGroup = from.endsWith('@g.us');
+            const senderName = msg.pushName || 'මගෙ ආදරේ';
+            const messageText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
 
-        const getPairCode = async () => {
-            await delay(4500);
-            try {
-                if (!sock.authState.creds.registered && !codeSent) {
-                    let code = await sock.requestPairingCode(num);
-                    code = code?.match(/.{1,4}/g)?.join('-') || code;
-                    codeSent = true;
-                    return res.json({ code });
+            if (!messageText.trim()) return;
+
+            if (isGroup) {
+                const cmd = messageText.trim().toLowerCase();
+                if (cmd === '.ai on') {
+                    await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: true }, { upsert: true });
+                    return sock.sendMessage(from, { text: 'Nethu ආවා පැටියෝ! 🥰✨' }, { quoted: msg });
                 }
-            } catch (err) {
-                if (!codeSent) {
-                    codeSent = true;
-                    console.error('[PAIR RETRY ERROR]:', err);
-                    return res.status(500).json({ error: 'WhatsApp pairing failed: ' + (err.message || 'Connection closed') });
+                if (cmd === '.ai off') {
+                    await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: false }, { upsert: true });
+                    return sock.sendMessage(from, { text: 'මම කැපුනා එහෙනම්! 🥺👋' }, { quoted: msg });
                 }
+                const groupConfig = await GroupSetting.findOne({ groupId: from });
+                if (!groupConfig || !groupConfig.aiEnabled) return;
             }
-        };
 
-        const timeout = setTimeout(() => {
-            if (!codeSent) {
-                codeSent = true;
-                return res.status(504).json({ error: 'Request timeout. කරුණාකර නැවත උත්සාහ කරන්න.' });
-            }
-        }, 30000);
-
-        getPairCode().finally(() => clearTimeout(timeout));
+            await sock.sendPresenceUpdate('composing', from);
+            const aiReply = await getAIResponse(from, messageText, senderName);
+            await sock.sendPresenceUpdate('paused', from);
+            await sock.sendMessage(from, { text: aiReply }, { quoted: msg });
+        });
 
     } catch (err) {
-        console.error('[API PAIRING ERROR]:', err);
-        return res.status(500).json({ error: err.message || 'Server error' });
+        console.error('[INIT ERROR]:', err);
+        setTimeout(initWhatsAppEngine, 5000);
     }
-});
+}
 
 // --- AI Chat Logic ---
 const SYSTEM_PROMPT = `
@@ -308,101 +347,14 @@ async function getAIResponse(jid, userMessage, senderName) {
     }
 }
 
-// --- Event Handlers Setup ---
-function setupConnectionListeners(targetSock) {
-    targetSock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
-
-        if (connection === 'close') {
-            isLinked = false;
-            const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log(`[CONNECTION] Closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
-            if (shouldReconnect) {
-                setTimeout(startExistingBot, 4000);
-            }
-        } else if (connection === 'open') {
-            isLinked = true;
-            console.log('\n💖 Nethu AI Bot Connected & Online Successfully!\n');
-            await backupSessionToDB();
-        }
-    });
-
-    targetSock.ev.on('messages.upsert', async ({ messages, type }) => {
-        if (type !== 'notify') return;
-        const msg = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
-
-        const from = msg.key.remoteJid;
-        const isGroup = from.endsWith('@g.us');
-        const senderName = msg.pushName || 'මගෙ ආදරේ';
-        const messageText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
-
-        if (!messageText.trim()) return;
-
-        if (isGroup) {
-            const cmd = messageText.trim().toLowerCase();
-            if (cmd === '.ai on') {
-                await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: true }, { upsert: true });
-                return targetSock.sendMessage(from, { text: 'Nethu ආවා පැටියෝ! 🥰✨' }, { quoted: msg });
-            }
-            if (cmd === '.ai off') {
-                await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: false }, { upsert: true });
-                return targetSock.sendMessage(from, { text: 'මම කැපුනා එහෙනම්! 🥺👋' }, { quoted: msg });
-            }
-            const groupConfig = await GroupSetting.findOne({ groupId: from });
-            if (!groupConfig || !groupConfig.aiEnabled) return;
-        }
-
-        await targetSock.sendPresenceUpdate('composing', from);
-        const aiReply = await getAIResponse(from, messageText, senderName);
-        await targetSock.sendPresenceUpdate('paused', from);
-        await targetSock.sendMessage(from, { text: aiReply }, { quoted: msg });
-    });
-}
-
-// --- Start Bot with Saved Session ---
-async function startExistingBot() {
-    try {
-        const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-        const { version } = await fetchLatestBaileysVersion();
-        const logger = pino({ level: 'silent' });
-
-        sock = makeWASocket({
-            version,
-            logger,
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, logger)
-            },
-            printQRInTerminal: false,
-            browser: ["Chrome (Linux)", "Chrome", "122.0.6261.112"],
-            syncFullHistory: false
-        });
-
-        sock.ev.on('creds.update', async () => {
-            await saveCreds();
-            await backupSessionToDB();
-        });
-
-        setupConnectionListeners(sock);
-    } catch (err) {
-        console.error('[START BOT ERROR]:', err);
-    }
-}
-
 // --- Server Startup ---
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(`[SERVER] Running on port ${PORT}`);
     try {
         await mongoose.connect(MONGO_URI);
         console.log('[DATABASE] MongoDB Connected!');
-        const hasSession = await restoreSessionFromDB();
-        if (hasSession && fs.existsSync(path.join(SESSION_DIR, 'creds.json'))) {
-            startExistingBot();
-        } else {
-            console.log('[INFO] Active session එකක් නොමැත. Web UI එකෙන් අංකය දී pair කරගන්න.');
-        }
+        await restoreSessionFromDB();
+        initWhatsAppEngine();
     } catch (err) {
         console.error('[DB ERROR]:', err.message);
     }
