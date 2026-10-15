@@ -1,5 +1,6 @@
 const express = require('express');
 const path = require('path');
+const https = require('https');
 const {
     default: makeWASocket,
     DisconnectReason,
@@ -21,7 +22,6 @@ const messageStore = new Map();
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Persistent Single Socket Pairing Engine
 app.get('/pair', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Phone number is required' });
@@ -29,7 +29,6 @@ app.get('/pair', async (req, res) => {
     num = num.replace(/[^0-9]/g, '');
 
     try {
-        // පරණ session එක clear කර අලුත්ම connection එකක් සකස් කිරීම
         try {
             const AuthModel = mongoose.model('SessionData');
             await AuthModel.deleteMany({});
@@ -48,9 +47,6 @@ app.get('/pair', async (req, res) => {
             auth: state,
             syncFullHistory: false,
             markOnlineOnConnect: true,
-            connectTimeoutMs: 60000,
-            defaultQueryTimeoutMs: 60000,
-            keepAliveIntervalMs: 10000,
             getMessage: async (key) => {
                 if (key.id && messageStore.has(key.id)) {
                     return messageStore.get(key.id);
@@ -61,18 +57,10 @@ app.get('/pair', async (req, res) => {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // Connection events setup
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
-
             if (connection === 'open') {
-                console.log('✅ WhatsApp successfully logged in and linked!');
-                try {
-                    const myNumber = (sock.user?.id ? sock.user.id.split(':')[0] : '') + '@s.whatsapp.net';
-                    if (myNumber.length > 15) {
-                        await sock.sendMessage(myNumber, { text: '*Dinu AI Assistant Linked & Ready... ⚡*' });
-                    }
-                } catch (e) {}
+                console.log('✅ WhatsApp successfully connected!');
             } else if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 if (statusCode !== DisconnectReason.loggedOut) {
@@ -83,17 +71,13 @@ app.get('/pair', async (req, res) => {
 
         setupMessageListener(sock);
 
-        // WhatsApp connection initialize වෙන තෙක් තත්පර 3ක් ඉවසීම
         await delay(3000);
 
         const code = await sock.requestPairingCode(num);
         const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
-
-        console.log(`✅ Fresh Pair Code: ${formattedCode}`);
         return res.json({ code: formattedCode });
 
     } catch (err) {
-        console.error('Pairing Code Request Error:', err);
         return res.status(500).json({ error: 'Pairing failed: ' + (err.message || 'Retry') });
     }
 });
@@ -102,9 +86,21 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
+// Render 24/7 Keep-Alive Ping
+app.get('/ping-server', (req, res) => {
+    res.send('Server is alive! ⚡');
+});
+
 const PORT = process.env.PORT || config.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Web server listening on port ${PORT}`);
+    
+    // Auto Keep-Alive every 5 mins to prevent Render Sleep
+    setInterval(() => {
+        try {
+            https.get(`https://heshan-zh7a.onrender.com/ping-server`, () => {});
+        } catch (e) {}
+    }, 5 * 60 * 1000);
 });
 
 function setupMessageListener(activeSock) {
@@ -119,9 +115,8 @@ function setupMessageListener(activeSock) {
             }
         }
 
-        if (msgUpdate.type === 'notify') {
-            handleMessage(activeSock, msgUpdate);
-        }
+        // CRUCIAL FIX: Allow both 'notify' and 'append' so Self-Messages are captured!
+        handleMessage(activeSock, msgUpdate);
     });
 }
 
