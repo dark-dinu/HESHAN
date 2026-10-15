@@ -14,14 +14,11 @@ const { handleMessage } = require('./handler');
 
 let sock = null;
 let isInitialized = false;
-
-// Simple, crash-proof in-memory message store
 const messageStore = new Map();
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Pair code endpoint
 app.get('/pair', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Phone number is required' });
@@ -44,7 +41,6 @@ app.get('/pair', async (req, res) => {
     }
 });
 
-// Render Port Bind (Mandatory)
 const PORT = process.env.PORT || config.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Web server listening on port ${PORT}`);
@@ -62,7 +58,7 @@ async function startBot() {
 
         sock = makeWASocket({
             version,
-            logger: pino({ level: 'silent' }),
+            logger: pino({ level: 'fatal' }), // Suppress all internal session dumps
             auth: state,
             syncFullHistory: false,
             markOnlineOnConnect: false,
@@ -98,7 +94,6 @@ async function startBot() {
         });
 
         sock.ev.on('messages.upsert', (msgUpdate) => {
-            // Cache recent messages to help decrypt replies
             for (const m of msgUpdate.messages || []) {
                 if (m.key?.id && m.message) {
                     messageStore.set(m.key.id, m.message);
@@ -115,7 +110,7 @@ async function startBot() {
         });
 
     } catch (err) {
-        console.error('Fatal Bot Startup Error:', err);
+        console.error('Bot Startup Error:', err);
         setTimeout(startBot, 5000);
     }
 }
