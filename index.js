@@ -4,7 +4,7 @@ const {
     default: makeWASocket,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    proto
+    makeInMemoryStore
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const config = require('./config');
@@ -14,6 +14,9 @@ const { loadCommands, handleMessage } = require('./handler');
 
 let sock = null;
 let isInitialized = false;
+
+// In-memory message store to fix "Waiting for this message"
+const store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
@@ -58,10 +61,17 @@ async function startBot() {
         auth: state,
         syncFullHistory: false,
         markOnlineOnConnect: false,
-        fireInitQueries: false,
-        shouldSyncHistoryMessage: () => false,
-        getMessage: async () => proto.Message.fromObject({})
+        // Crucial: Correct message loader for decryption
+        getMessage: async (key) => {
+            if (store) {
+                const msg = await store.loadMessage(key.remoteJid, key.id);
+                return msg?.message || undefined;
+            }
+            return undefined;
+        }
     });
+
+    store?.bind(sock.ev);
 
     sock.ev.on('creds.update', saveCreds);
 
@@ -83,7 +93,6 @@ async function startBot() {
         }
     });
 
-    // Zero-lag event trigger
     sock.ev.on('messages.upsert', (msgUpdate) => {
         if (msgUpdate.type === 'notify') {
             handleMessage(sock, msgUpdate);
