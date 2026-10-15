@@ -9,12 +9,11 @@ const AuthSchema = new mongoose.Schema({
 const AuthModel = mongoose.model('SessionData', AuthSchema);
 
 async function useMongoDBAuthState() {
-    const credsDoc = await AuthModel.findOne({ id: 'creds' });
     let creds;
-
-    if (credsDoc) {
-        creds = JSON.parse(credsDoc.data, BufferJSON.reviver);
-    } else {
+    try {
+        const credsDoc = await AuthModel.findOne({ id: 'creds' });
+        creds = credsDoc ? JSON.parse(credsDoc.data, BufferJSON.reviver) : initAuthCreds();
+    } catch (e) {
         creds = initAuthCreds();
     }
 
@@ -26,14 +25,16 @@ async function useMongoDBAuthState() {
                     const data = {};
                     await Promise.all(
                         ids.map(async (id) => {
-                            const doc = await AuthModel.findOne({ id: `${type}-${id}` });
-                            if (doc) {
-                                let value = JSON.parse(doc.data, BufferJSON.reviver);
-                                if (type === 'app-state-sync-key' && value) {
-                                    value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                            try {
+                                const doc = await AuthModel.findOne({ id: `${type}-${id}` });
+                                if (doc) {
+                                    let value = JSON.parse(doc.data, BufferJSON.reviver);
+                                    if (type === 'app-state-sync-key' && value) {
+                                        value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                                    }
+                                    data[id] = value;
                                 }
-                                data[id] = value;
-                            }
+                            } catch (e) {}
                         })
                     );
                     return data;
@@ -62,11 +63,13 @@ async function useMongoDBAuthState() {
             }
         },
         saveCreds: async () => {
-            await AuthModel.updateOne(
-                { id: 'creds' },
-                { $set: { data: JSON.stringify(creds, BufferJSON.replacer) } },
-                { upsert: true }
-            );
+            try {
+                await AuthModel.updateOne(
+                    { id: 'creds' },
+                    { $set: { data: JSON.stringify(creds, BufferJSON.replacer) } },
+                    { upsert: true }
+                );
+            } catch (e) {}
         }
     };
 }
