@@ -11,7 +11,8 @@ const {
     DisconnectReason,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
-    delay
+    delay,
+    Browsers
 } = pkg;
 
 const PORT = process.env.PORT || 10000;
@@ -44,19 +45,19 @@ app.get('/', (req, res) => {
             button { width: 100%; padding: 14px; border-radius: 12px; border: none; background: #f43f5e; color: #fff; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
             button:hover { background: #e11d48; }
             #codeDisplay { display: none; margin-top: 25px; padding: 16px; background: #0f172a; border-radius: 12px; border: 2px dashed #f43f5e; }
-            #codeDisplay span { font-size: 24px; font-weight: bold; letter-spacing: 4px; color: #38bdf8; display: block; margin-top: 8px; }
-            .copy-btn { margin-top: 10px; background: #334155; padding: 8px; font-size: 13px; }
+            #codeDisplay span { font-size: 26px; font-weight: bold; letter-spacing: 5px; color: #38bdf8; display: block; margin-top: 8px; }
+            .copy-btn { margin-top: 12px; background: #334155; padding: 8px; font-size: 13px; }
         </style>
     </head>
     <body>
         <div class="card">
             <h1>Nethu AI Bot 💖</h1>
             <p>WhatsApp අංකය ඇතුළත් කර Pairing Code එක ලබාගන්න</p>
-            <input type="text" id="phone" placeholder="947xxxxxxxx (No +)" />
+            <input type="text" id="phone" placeholder="947xxxxxxxx (0 නැතුව)" />
             <button id="btn" onclick="getCode()">Pairing Code එක ගන්න</button>
             
             <div id="codeDisplay">
-                <p style="margin:0; font-size:12px;">ඔබගේ Pairing Code එක:</p>
+                <p style="margin:0; font-size:12px;">ඔබගේ Pairing Code එක (තත්පර 20ක් ඇතුළත Link කරන්න):</p>
                 <span id="pairingCode">----</span>
                 <button class="copy-btn" onclick="copyCode()">Copy Code</button>
             </div>
@@ -69,7 +70,7 @@ app.get('/', (req, res) => {
                 const display = document.getElementById('codeDisplay');
                 const codeSpan = document.getElementById('pairingCode');
 
-                if (!phone || phone.length < 10) {
+                if (!phone || phone.length < 9) {
                     alert('කරුණාකර නිවැරදි WhatsApp අංකයක් ඇතුළත් කරන්න!');
                     return;
                 }
@@ -105,26 +106,30 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Pairing Code API
+// Pairing Code Endpoint
 app.get('/code', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Number is required' });
 
     num = num.replace(/[^0-9]/g, '');
+    if (num.startsWith('0')) {
+        num = '94' + num.slice(1);
+    }
 
     try {
         if (!sock) {
-            return res.status(500).json({ error: 'Bot initialization වෙමින් පවතී. තත්පර කීපයකින් නැවත උත්සාහ කරන්න.' });
+            return res.status(500).json({ error: 'Bot initialization වෙමින් පවතී. තත්පර 5කින් නැවත උත්සාහ කරන්න.' });
         }
 
         if (sock.authState?.creds?.registered) {
             return res.json({ error: 'WhatsApp bot එක දැනටමත් Link වී ඇත!' });
         }
 
-        await delay(1500);
+        await delay(2000);
         let code = await sock.requestPairingCode(num);
         code = code?.match(/.{1,4}/g)?.join('-') || code;
 
+        console.log(`[PAIRING] New code requested for ${num}: ${code}`);
         return res.json({ code });
     } catch (err) {
         console.error('[PAIR CODE API ERROR]:', err);
@@ -154,7 +159,7 @@ const groupSettingSchema = new mongoose.Schema({
 
 const GroupSetting = mongoose.models.GroupSetting || mongoose.model('GroupSetting', groupSettingSchema);
 
-// Nethu Character Persona
+// Nethu Character Prompt
 const SYSTEM_PROMPT = `
 ඔයාගේ නම Nethu. ඔයා වයස අවුරුදු 19ක හුරුබුහුටි, අහිංසක, ලස්සන ආදරණීය කෙල්ලෙක්. ගම අනුරාධපුරේ.
 චරිත ලක්ෂණ:
@@ -232,8 +237,12 @@ async function startBot() {
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
             printQRInTerminal: false,
-            browser: ['Ubuntu', 'Chrome', '20.0.04'],
-            syncFullHistory: false
+            // Official macOS Chrome Desktop signature එකෙන් Pairing error විසඳේ
+            browser: Browsers.macOS('Desktop'),
+            syncFullHistory: false,
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 0,
+            keepAliveIntervalMs: 10000
         });
 
         sock.ev.on('connection.update', (update) => {
@@ -270,6 +279,7 @@ async function startBot() {
 
             if (!messageText.trim()) return;
 
+            // Group Controls
             if (isGroup) {
                 const cmd = messageText.trim().toLowerCase();
 
@@ -309,11 +319,9 @@ async function startBot() {
     }
 }
 
-// 1. Render Port එක වහාම Bind කිරීම (0.0.0.0 මත)
+// Start Server & DB
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(`[SERVER] Express server bound to 0.0.0.0:${PORT}`);
-    
-    // 2. MongoDB Connect කර Bot පටන් ගැනීම
     try {
         await mongoose.connect(MONGO_URI);
         console.log('[DATABASE] MongoDB connected successfully!');
