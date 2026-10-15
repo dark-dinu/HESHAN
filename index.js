@@ -23,6 +23,7 @@ const messageStore = new Map();
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 
+// 1. FRESH INSTANT PAIRING ENDPOINT
 app.get('/pair', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Phone number is required' });
@@ -30,18 +31,21 @@ app.get('/pair', async (req, res) => {
     num = num.replace(/[^0-9]/g, '');
 
     try {
+        // පරණ හිරවුණු session data Database එකෙන් ඉවත් කිරීම
         try {
             const AuthModel = mongoose.model('SessionData');
             await AuthModel.deleteMany({});
         } catch (e) {}
 
+        if (sock) {
+            try { sock.end(); } catch (e) {}
+            sock = null;
+        }
+
         const { state, saveCreds } = await useMongoDBAuthState();
         const { version } = await fetchLatestBaileysVersion();
 
-        if (sock) {
-            try { sock.end(); } catch (e) {}
-        }
-
+        // Dedicated Keep-Alive Socket
         sock = makeWASocket({
             version,
             logger: pino({ level: 'fatal' }),
@@ -49,7 +53,9 @@ app.get('/pair', async (req, res) => {
             browser: Browsers.macOS('Desktop'),
             syncFullHistory: false,
             markOnlineOnConnect: true,
-            generateHighQualityLinkPreview: true,
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 60000,
+            keepAliveIntervalMs: 10000,
             getMessage: async (key) => {
                 if (key.id && messageStore.has(key.id)) {
                     return messageStore.get(key.id);
@@ -60,10 +66,18 @@ app.get('/pair', async (req, res) => {
 
         sock.ev.on('creds.update', saveCreds);
 
+        // Connection Handshake Listener
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
+
             if (connection === 'open') {
-                console.log('✅ WhatsApp successfully connected!');
+                console.log('✅ WhatsApp successfully paired & connected!');
+                try {
+                    const myNumber = (sock.user?.id ? sock.user.id.split(':')[0] : '') + '@s.whatsapp.net';
+                    if (myNumber.length > 15) {
+                        await sock.sendMessage(myNumber, { text: '*Dinu AI Assistant Ready... ⚡*' });
+                    }
+                } catch (e) {}
             } else if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 if (statusCode !== DisconnectReason.loggedOut) {
@@ -74,13 +88,17 @@ app.get('/pair', async (req, res) => {
 
         setupMessageListener(sock);
 
+        // Socket එක WhatsApp server එකට Handshake වන තෙක් තත්පර 3ක් රැඳී සිටීම
         await delay(3000);
 
         const code = await sock.requestPairingCode(num);
         const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
+
+        console.log(`✅ Fresh Pair Code Issued: ${formattedCode}`);
         return res.json({ code: formattedCode });
 
     } catch (err) {
+        console.error('Pairing Error:', err);
         return res.status(500).json({ error: 'Pairing failed: ' + (err.message || 'Retry') });
     }
 });
@@ -97,6 +115,7 @@ const PORT = process.env.PORT || config.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Web server listening on port ${PORT}`);
     
+    // Auto Keep-Alive every 5 mins to prevent Render Sleep
     setInterval(() => {
         try {
             https.get(`https://heshan-zh7a.onrender.com/ping-server`, () => {});
@@ -124,6 +143,7 @@ function setupMessageListener(activeSock) {
     });
 }
 
+// Existing valid session එකකින් run වීම
 async function startBot() {
     try {
         if (!isInitialized) {
@@ -133,7 +153,7 @@ async function startBot() {
 
         const { state, saveCreds } = await useMongoDBAuthState();
         if (!state.creds?.registered && !state.creds?.me) {
-            console.log('⚡ Ready for pairing via web.');
+            console.log('⚡ No session found. Waiting for pairing code from web...');
             return;
         }
 
