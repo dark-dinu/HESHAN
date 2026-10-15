@@ -6,10 +6,9 @@ const AuthSchema = new mongoose.Schema({
     data: { type: String, required: true }
 });
 
-const AuthModel = mongoose.model('AuthSession', AuthSchema);
+const AuthModel = mongoose.model('SessionData', AuthSchema);
 
 async function useMongoDBAuthState() {
-    // 1. Load or Initialize Creds
     const credsDoc = await AuthModel.findOne({ id: 'creds' });
     let creds;
 
