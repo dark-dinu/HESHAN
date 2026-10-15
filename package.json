@@ -1,16 +1,18 @@
 {
   "name": "nethu-ai-bot",
-  "version": "5.0.0",
-  "type": "module",
+  "version": "4.0.0",
+  "description": "Nethu AI WhatsApp Multi-Device Bot",
+  "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^6.7.22",
-    "@hapi/boom": "^10.0.1",
+    "@whiskeysockets/baileys": "^6.7.18",
     "axios": "^1.7.9",
     "express": "^4.21.2",
-    "mongoose": "^8.8.4",
-    "pino": "^9.6.0"
+    "mongoose": "^8.9.5",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
   }
 }
