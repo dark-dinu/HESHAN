@@ -1,7 +1,7 @@
 {
   "name": "speed-bot",
-  "version": "3.0.0",
-  "description": "High performance clean bot with pair site",
+  "version": "1.0.0",
+  "description": "Ultra fast zero-latency bot",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
