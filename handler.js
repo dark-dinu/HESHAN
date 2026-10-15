@@ -8,7 +8,7 @@ async function handleMessage(sock, msgUpdate) {
         const jid = msg.key.remoteJid;
         if (!jid || jid === 'status@broadcast') return;
 
-        // Message text extract කර ගැනීම
+        // Message text extract කිරීම
         let m = msg.message;
         if (m.ephemeralMessage) m = m.ephemeralMessage.message;
         if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
@@ -21,18 +21,24 @@ async function handleMessage(sock, msgUpdate) {
         const text = body.trim();
         if (!text) return;
 
-        // 1. TRIGGER CHECK: "dinu", "Dinu", "දිනූ", "දිනු" වාක්‍යයේ ඕනෑම තැනක තිබේදැයි බැලීම
-        const regexDinu = /\b(dinu)\b|dinu|දිනූ|දිනු/i;
+        // 1. "dinu" හෝ "දිනූ" / "දිනු" වචනය කොතැනක හෝ තිබේදැයි බැලීම
+        const regexDinu = /dinu|දිනූ|දිනු/i;
         if (!regexDinu.test(text)) return;
 
-        // 2. STRICT OWNER-ONLY CHECK:
-        // ඔයාගෙන්ම එන මැසේජ් (fromMe) හෝ ඔයාගේම account එකේ Self Chat පමණක් භාර ගැනීම
-        const myJidNum = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : '';
-        const senderNum = (msg.key.participant || jid).split(':')[0].split('@')[0];
-        const isFromMe = msg.key.fromMe || (myJidNum && senderNum === myJidNum);
+        // 2. OWNER DETECTION:
+        // Bot run වෙන Phone Number එක extract කර ගැනීම
+        const myFullId = sock.user?.id || '';
+        const botNumber = myFullId.split(':')[0].replace(/[^0-9]/g, '');
 
-        // වෙන කිසිම කෙනෙකුට Dinu කිසිම රිප්ලයි එකක් දෙන්නේ නැත
-        if (!isFromMe) return;
+        // Message එක එවපු කෙනාගේ Number එක extract කර ගැනීම
+        const senderJid = msg.key.participant || jid;
+        const senderNumber = senderJid.split(':')[0].replace(/[^0-9]/g, '');
+
+        // ඔයා යැවූ මැසේජ් එකක්ද (fromMe) හෝ ඔයාගේම නම්බර් එකෙන් ආපු එකක්ද කියා පරීක්ෂා කිරීම
+        const isOwner = msg.key.fromMe || (botNumber && senderNumber === botNumber);
+
+        // ඔයාට හැර වෙන කිසිම කෙනෙකුට රිප්ලයි නොකිරීම
+        if (!isOwner) return;
 
         // Quoted message extract කිරීම
         const quoted = m.extendedTextMessage?.contextInfo?.quotedMessage;
@@ -48,18 +54,16 @@ async function handleMessage(sock, msgUpdate) {
         if (isNaN(latency) || latency < 0) latency = 5;
         if (latency === 0) latency = 1;
 
-        // React එක සම්පූර්ණයෙන්ම අයින් කර ඇත (Zero Reaction)
-
-        // Process AI / Action Request
+        // AI Request Processing
         const responseText = await processDinuRequest(sock, jid, msg, quotedMsg, text, latency);
 
-        // Direct Text Reply
+        // Direct Text Reply (No reactions)
         if (responseText) {
             await sock.sendMessage(jid, { text: responseText });
         }
 
     } catch (err) {
-        console.error('Handler execution error:', err);
+        console.error('Handler error:', err);
     }
 }
 
