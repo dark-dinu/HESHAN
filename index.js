@@ -12,7 +12,6 @@ const {
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     useMultiFileAuthState,
-    delay,
     Browsers
 } = pkg;
 
@@ -20,13 +19,56 @@ const PORT = process.env.PORT || 10000;
 const OPENROUTER_API_KEY = "Sk-or-v1-49e4e4ecd1ad03c590399fa189e608e277356eb1d76686bdf986a40201c3596b";
 const MONGO_URI = "mongodb+srv://diniduheshan40_db_user:Heshan2007@cluster0.5gazebm.mongodb.net/?appName=Cluster0";
 
+// මෙතනට ඔයාගේ WhatsApp අංකය දාන්න (උදා: 947xxxxxxxx)
+const BOT_NUMBER = (process.env.BOT_NUMBER || '94770000000').replace(/[^0-9]/g, '');
+
 const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-
 let sock = null;
+let latestPairingCode = 'Generating... (රැඳී සිටින්න)';
+let isLinked = false;
 
-// --- MongoDB Database Connection & Schemas ---
+// --- Web UI (Pairing Code එක බලාගැනීමට) ---
+app.get('/', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta http-equiv="refresh" content="5">
+        <title>Nethu AI - One-Shot Pairing</title>
+        <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
+            body { background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+            .card { background: #111b21; padding: 32px; border-radius: 20px; box-shadow: 0 12px 30px rgba(0,0,0,0.6); max-width: 440px; width: 100%; text-align: center; border: 1px solid #202c33; }
+            h1 { font-size: 24px; margin-bottom: 6px; color: #00a884; }
+            p { font-size: 13px; color: #8696a0; margin-bottom: 20px; }
+            .box { padding: 20px; background: #202c33; border-radius: 12px; border: 2px dashed #00a884; margin-bottom: 16px; }
+            .code { font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #25d366; display: block; }
+            .status { font-size: 14px; font-weight: 600; color: #38bdf8; }
+            .btn { background: #00a884; color: #111b21; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 10px; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Nethu AI Bot 💖</h1>
+            <p>Target Number: <b>${BOT_NUMBER}</b></p>
+            
+            <div class="box">
+                <span style="font-size: 12px; color: #8696a0;">PAIRING CODE:</span>
+                <span class="code" id="pcode">${latestPairingCode}</span>
+                ${isLinked ? '<span style="color:#25d366; font-weight:bold;">✅ Bot is Connected & Active!</span>' : ''}
+            </div>
+
+            <p class="status">WhatsApp -> Linked Devices -> Link with phone number instead</p>
+            <button class="btn" onclick="navigator.clipboard.writeText('${latestPairingCode}'); alert('Copied: ${latestPairingCode}');">Copy Code</button>
+        </div>
+    </body>
+    </html>
+    `);
+});
+
+// --- MongoDB Database Models ---
 const sessionBackupSchema = new mongoose.Schema({
     id: { type: String, default: 'main_session' },
     sessionData: { type: Object, required: true }
@@ -52,7 +94,6 @@ const groupSettingSchema = new mongoose.Schema({
 });
 const GroupSetting = mongoose.models.GroupSetting || mongoose.model('GroupSetting', groupSettingSchema);
 
-// MongoDB Backup Helper: Render restart වූ විට session එක restore කිරීමට
 async function restoreSessionFromDB() {
     try {
         const backup = await SessionBackup.findOne({ id: 'main_session' });
@@ -61,7 +102,7 @@ async function restoreSessionFromDB() {
             for (const [filename, content] of Object.entries(backup.sessionData)) {
                 fs.writeFileSync(`./session/${filename}`, content);
             }
-            console.log('[DATABASE] Previous WhatsApp session restored successfully!');
+            console.log('[DATABASE] Previous WhatsApp session restored!');
         }
     } catch (e) {
         console.error('[RESTORE ERROR]:', e.message);
@@ -81,128 +122,13 @@ async function backupSessionToDB() {
             { sessionData },
             { upsert: true }
         );
-        console.log('[DATABASE] Session state safely backed up to MongoDB!');
+        console.log('[DATABASE] Session synced to MongoDB!');
     } catch (e) {
         console.error('[BACKUP ERROR]:', e.message);
     }
 }
 
-// --- Built-in Pairing Web Page ---
-app.get('/', (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Nethu AI - One-Shot Fast Pairing</title>
-        <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
-            body { background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
-            .card { background: #111b21; padding: 32px; border-radius: 20px; box-shadow: 0 12px 30px rgba(0,0,0,0.6); max-width: 420px; width: 100%; text-align: center; border: 1px solid #202c33; }
-            h1 { font-size: 24px; margin-bottom: 6px; color: #00a884; }
-            p { font-size: 13px; color: #8696a0; margin-bottom: 22px; }
-            input { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #2a3942; background: #202c33; color: #fff; font-size: 16px; margin-bottom: 16px; outline: none; text-align: center; letter-spacing: 1px; }
-            input:focus { border-color: #00a884; }
-            button { width: 100%; padding: 14px; border-radius: 10px; border: none; background: #00a884; color: #111b21; font-size: 15px; font-weight: 700; cursor: pointer; transition: 0.2s; }
-            button:hover { background: #02906f; }
-            #codeDisplay { display: none; margin-top: 22px; padding: 18px; background: #202c33; border-radius: 12px; border: 2px dashed #00a884; }
-            #codeDisplay span { font-size: 30px; font-weight: 800; letter-spacing: 6px; color: #25d366; display: block; margin-top: 6px; }
-            .copy-btn { margin-top: 12px; background: #374248; color: #e9edef; padding: 8px 16px; font-size: 13px; font-weight: 600; border-radius: 6px; width: auto; }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>Nethu AI Bot 💖</h1>
-            <p>WhatsApp අංකය ඇතුළත් කර Pairing Code එක ලබාගන්න</p>
-            <input type="text" id="phone" placeholder="947xxxxxxxx" />
-            <button id="btn" onclick="getCode()">Pairing Code එක ගන්න</button>
-            
-            <div id="codeDisplay">
-                <p style="margin:0; font-size:12px; color:#8696a0;">WhatsApp එකට ඇතුළත් කරන්න:</p>
-                <span id="pairingCode">----</span>
-                <button class="copy-btn" onclick="copyCode()">Copy Code</button>
-            </div>
-        </div>
-
-        <script>
-            async function getCode() {
-                const phone = document.getElementById('phone').value.trim();
-                const btn = document.getElementById('btn');
-                const display = document.getElementById('codeDisplay');
-                const codeSpan = document.getElementById('pairingCode');
-
-                if (!phone || phone.length < 9) {
-                    alert('කරුණාකර නිවැරදි WhatsApp අංකයක් ඇතුළත් කරන්න!');
-                    return;
-                }
-
-                btn.innerText = 'කෝඩ් එක සකස් කරමින්...';
-                btn.disabled = true;
-
-                try {
-                    const res = await fetch('/code?number=' + encodeURI(phone));
-                    const data = await res.json();
-                    if (data.code) {
-                        display.style.display = 'block';
-                        codeSpan.innerText = data.code;
-                    } else {
-                        alert(data.error || 'ගැටලුවක් මතු විය. නැවත උත්සාහ කරන්න.');
-                    }
-                } catch(e) {
-                    alert('Error: ' + e.message);
-                } finally {
-                    btn.innerText = 'Pairing Code එක ගන්න';
-                    btn.disabled = false;
-                }
-            }
-
-            function copyCode() {
-                const code = document.getElementById('pairingCode').innerText;
-                navigator.clipboard.writeText(code);
-                alert('Code එක Copy කරගත්තා: ' + code);
-            }
-        </script>
-    </body>
-    </html>
-    `);
-});
-
-// Fast Pairing Code Endpoint
-app.get('/code', async (req, res) => {
-    let num = req.query.number;
-    if (!num) return res.status(400).json({ error: 'Number is required' });
-
-    num = num.replace(/[^0-9]/g, '');
-    if (num.startsWith('0')) {
-        num = '94' + num.slice(1);
-    }
-
-    try {
-        if (sock?.authState?.creds?.registered) {
-            return res.json({ error: 'WhatsApp bot එක දැනටමත් Link වී ඇත!' });
-        }
-
-        // Clean local session for a fresh start
-        if (fs.existsSync('./session')) {
-            fs.rmSync('./session', { recursive: true, force: true });
-        }
-        await SessionBackup.deleteMany({});
-        await startBot();
-        await delay(2500);
-
-        let code = await sock.requestPairingCode(num);
-        code = code?.match(/.{1,4}/g)?.join('-') || code;
-
-        console.log(`[PAIRING] Zero-Latency Code Generated for ${num}: ${code}`);
-        return res.json({ code });
-    } catch (err) {
-        console.error('[PAIR CODE ERROR]:', err);
-        return res.status(500).json({ error: 'කෝඩ් එක ලබාගැනීමට නොහැකි විය: ' + err.message });
-    }
-});
-
-// Nethu Character Persona
+// Nethu Prompt
 const SYSTEM_PROMPT = `
 ඔයාගේ නම Nethu. ඔයා වයස අවුරුදු 19ක හුරුබුහුටි, අහිංසක, ලස්සන ආදරණීය කෙල්ලෙක්. ගම අනුරාධපුරේ.
 චරිත ලක්ෂණ:
@@ -265,13 +191,9 @@ async function getAIResponse(jid, userMessage, senderName) {
     }
 }
 
-// Bot Initializer
+// WhatsApp Connection Engine
 async function startBot() {
     try {
-        if (sock) {
-            try { sock.end(); } catch (e) {}
-        }
-
         const { state, saveCreds } = await useMultiFileAuthState('./session');
         const { version } = await fetchLatestBaileysVersion();
         const logger = pino({ level: 'silent' });
@@ -291,10 +213,25 @@ async function startBot() {
             keepAliveIntervalMs: 10000
         });
 
+        // නිල Baileys Protocol එක: Socket එක WhatsApp servers වලට 100% Ready වූ සැනින් ('qr' trigger) code එක ඉල්ලීම
         sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
+            const { connection, lastDisconnect, qr } = update;
+
+            if (qr && !sock.authState.creds.registered) {
+                try {
+                    let code = await sock.requestPairingCode(BOT_NUMBER);
+                    code = code?.match(/.{1,4}/g)?.join('-') || code;
+                    latestPairingCode = code;
+                    console.log('\n=========================================');
+                    console.log(`🔥 100% VALID PAIRING CODE: ${code}`);
+                    console.log('=========================================\n');
+                } catch (err) {
+                    console.error('[PAIRING ERROR]:', err.message);
+                }
+            }
 
             if (connection === 'close') {
+                isLinked = false;
                 const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 console.log(`[CONNECTION] Closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
@@ -302,15 +239,15 @@ async function startBot() {
                     setTimeout(startBot, 4000);
                 }
             } else if (connection === 'open') {
+                isLinked = true;
+                latestPairingCode = 'CONNECTED! 💖';
                 console.log('\n💖 Nethu AI Bot Connected & Ready to Love!\n');
-                // Link වූ විගස MongoDB එකට session backup කිරීම
                 await backupSessionToDB();
             }
         });
 
         sock.ev.on('creds.update', async () => {
             await saveCreds();
-            // Auth update වන විට background sync
             await backupSessionToDB();
         });
 
@@ -331,6 +268,7 @@ async function startBot() {
 
             if (!messageText.trim()) return;
 
+            // Group Handlers
             if (isGroup) {
                 const cmd = messageText.trim().toLowerCase();
 
@@ -365,14 +303,13 @@ async function startBot() {
             await sock.sendMessage(from, { text: aiReply }, { quoted: msg });
         });
     } catch (err) {
-        console.error('[BOT INIT ERROR]:', err);
+        console.error('[BOT ERROR]:', err);
         setTimeout(startBot, 5000);
     }
 }
 
-// Server Startup
 app.listen(PORT, '0.0.0.0', async () => {
-    console.log(`[SERVER] Express bound to 0.0.0.0:${PORT}`);
+    console.log(`[SERVER] Express listening on port ${PORT}`);
     try {
         await mongoose.connect(MONGO_URI);
         console.log('[DATABASE] MongoDB connected successfully!');
