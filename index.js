@@ -6,7 +6,8 @@ const {
     DisconnectReason,
     fetchLatestBaileysVersion,
     proto,
-    delay
+    delay,
+    Browsers
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const mongoose = require('mongoose');
@@ -45,8 +46,10 @@ app.get('/pair', async (req, res) => {
             version,
             logger: pino({ level: 'fatal' }),
             auth: state,
+            browser: Browsers.macOS('Desktop'),
             syncFullHistory: false,
             markOnlineOnConnect: true,
+            generateHighQualityLinkPreview: true,
             getMessage: async (key) => {
                 if (key.id && messageStore.has(key.id)) {
                     return messageStore.get(key.id);
@@ -94,7 +97,6 @@ const PORT = process.env.PORT || config.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Web server listening on port ${PORT}`);
     
-    // Auto Keep-Alive every 5 mins to prevent Render Sleep
     setInterval(() => {
         try {
             https.get(`https://heshan-zh7a.onrender.com/ping-server`, () => {});
@@ -109,12 +111,11 @@ function setupMessageListener(activeSock) {
             for (const m of messages) {
                 if (m.key?.id && m.message) {
                     messageStore.set(m.key.id, m.message);
-                    if (messageStore.size > 500) {
+                    if (messageStore.size > 1000) {
                         const oldestKey = messageStore.keys().next().value;
                         messageStore.delete(oldestKey);
                     }
                 }
-                // Call handler directly per message
                 await handleMessage(activeSock, m);
             }
         } catch (e) {
@@ -142,8 +143,10 @@ async function startBot() {
             version,
             logger: pino({ level: 'fatal' }),
             auth: state,
+            browser: Browsers.macOS('Desktop'),
             syncFullHistory: false,
             markOnlineOnConnect: true,
+            generateHighQualityLinkPreview: true,
             getMessage: async (key) => {
                 if (key.id && messageStore.has(key.id)) {
                     return messageStore.get(key.id);
