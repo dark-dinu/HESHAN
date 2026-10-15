@@ -42,7 +42,7 @@ async function actionMakeSticker(sock, jid, msg, quotedMsg) {
     }
 }
 
-// 3. Save Status or View-Once
+// 3. Save Media
 async function actionSaveMedia(sock, jid, quotedMsg) {
     try {
         if (!quotedMsg) return "මට download කරන්න media එකක් quote කරලා නෑ.";
@@ -132,8 +132,21 @@ async function actionSendChannelPost(sock, msg, quotedMsg, promptText) {
     }
 }
 
-// 7. AI Action Decision Router
+// 7. Core AI Action Decider
 async function processDinuRequest(sock, jid, msg, quotedMsg, promptText, latency) {
+    const low = promptText.toLowerCase();
+
+    // Fast-path for quick keywords
+    if (low.includes('ping') || low.includes('speed')) {
+        return `\`\`\`Dinu Speed: ${latency}ms 🚀\`\`\`\nමම online ඉන්නේ මචං, කියන්න මොනවද වෙන්න ඕන?`;
+    }
+    if ((low.includes('dp') || low.includes('photo')) && (msg.message?.imageMessage || quotedMsg?.imageMessage)) {
+        return await actionChangeDP(sock, msg, quotedMsg);
+    }
+    if (low.includes('sticker') && (msg.message?.imageMessage || quotedMsg?.imageMessage)) {
+        return await actionMakeSticker(sock, jid, msg, quotedMsg);
+    }
+
     const systemPrompt = `You are 'Dinu', the ultra-smart personal WhatsApp assistant of the bot owner.
 Understand the owner's natural language command and strictly choose an action.
 
@@ -147,7 +160,7 @@ Available Actions:
 - "UNMUTE_GROUP": Unmute group/open chat for all.
 - "SEND_CHANNEL_POST": Send text/post to channel or group link.
 - "CHECK_PING": Inquire about ping, speed, or status.
-- "CHAT": General discussion or programming/creative requests.
+- "CHAT": General discussion or greeting.
 
 Output STRICT JSON only:
 {"action": "ACTION_NAME", "reply": "Natural friendly Sinhala text response"}`;
@@ -161,14 +174,14 @@ Output STRICT JSON only:
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: promptText }
                 ],
-                temperature: 0.2
+                temperature: 0.3
             },
             {
                 headers: {
                     'Authorization': `Bearer ${config.OPENROUTER_API_KEY}`,
                     'Content-Type': 'application/json'
                 },
-                timeout: 15000
+                timeout: 12000
             }
         );
 
@@ -185,15 +198,12 @@ Output STRICT JSON only:
             case 'MUTE_GROUP': return await actionGroupMute(sock, jid, true);
             case 'UNMUTE_GROUP': return await actionGroupMute(sock, jid, false);
             case 'SEND_CHANNEL_POST': return await actionSendChannelPost(sock, msg, quotedMsg, promptText);
-            case 'CHECK_PING': return `\`\`\`Dinu Speed: ${latency}ms 🚀\`\`\`\nමම online ඉන්නේ මචං!`;
-            default: return parsed.reply || "ඔව් මචං, කියන්න මොකක්ද මම කරලා දෙන්න ඕනේ?";
+            case 'CHECK_PING': return `\`\`\`Dinu Speed: ${latency}ms 🚀\`\`\``;
+            default: return parsed.reply || "ඔව් මචං, මම අහගෙන ඉන්නේ. කියන්න මොකක්ද මම කරලා දෙන්න ඕනේ?";
         }
     } catch (err) {
-        const low = promptText.toLowerCase();
-        if (low.includes('sticker')) return await actionMakeSticker(sock, jid, msg, quotedMsg);
-        if (low.includes('dp')) return await actionChangeDP(sock, msg, quotedMsg);
-        if (low.includes('ping') || low.includes('speed')) return `\`\`\`Dinu Speed: ${latency}ms 🚀\`\`\``;
-        return "ඔව් මචං, මම අහගෙන ඉන්නේ!";
+        console.error('AI Request Error:', err.message);
+        return "ඔව් මචං, මම online ඉන්නේ! මොකක්ද මම කරලා දෙන්න ඕන?";
     }
 }
 
