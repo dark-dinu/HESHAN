@@ -4,13 +4,14 @@ import pino from 'pino';
 import axios from 'axios';
 import express from 'express';
 import mongoose from 'mongoose';
-import { useMongoDBAuthState, AuthModel } from './auth.js';
+import fs from 'fs';
 
 const makeWASocket = pkg.default?.default || pkg.default || pkg;
 const {
     DisconnectReason,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
+    useMultiFileAuthState,
     delay,
     Browsers
 } = pkg;
@@ -24,9 +25,69 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 let sock = null;
-let isStarting = false;
 
-// --- Pairing Web Site UI ---
+// --- MongoDB Database Connection & Schemas ---
+const sessionBackupSchema = new mongoose.Schema({
+    id: { type: String, default: 'main_session' },
+    sessionData: { type: Object, required: true }
+});
+const SessionBackup = mongoose.models.SessionBackup || mongoose.model('SessionBackup', sessionBackupSchema);
+
+const memorySchema = new mongoose.Schema({
+    jid: { type: String, required: true, unique: true },
+    messages: [
+        {
+            role: { type: String, enum: ['user', 'assistant'] },
+            content: { type: String, required: true },
+            timestamp: { type: Date, default: Date.now }
+        }
+    ],
+    updatedAt: { type: Date, default: Date.now }
+});
+const Memory = mongoose.models.Memory || mongoose.model('Memory', memorySchema);
+
+const groupSettingSchema = new mongoose.Schema({
+    groupId: { type: String, required: true, unique: true },
+    aiEnabled: { type: Boolean, default: false }
+});
+const GroupSetting = mongoose.models.GroupSetting || mongoose.model('GroupSetting', groupSettingSchema);
+
+// MongoDB Backup Helper: Render restart වූ විට session එක restore කිරීමට
+async function restoreSessionFromDB() {
+    try {
+        const backup = await SessionBackup.findOne({ id: 'main_session' });
+        if (backup && backup.sessionData) {
+            if (!fs.existsSync('./session')) fs.mkdirSync('./session');
+            for (const [filename, content] of Object.entries(backup.sessionData)) {
+                fs.writeFileSync(`./session/${filename}`, content);
+            }
+            console.log('[DATABASE] Previous WhatsApp session restored successfully!');
+        }
+    } catch (e) {
+        console.error('[RESTORE ERROR]:', e.message);
+    }
+}
+
+async function backupSessionToDB() {
+    try {
+        if (!fs.existsSync('./session')) return;
+        const files = fs.readdirSync('./session');
+        const sessionData = {};
+        for (const file of files) {
+            sessionData[file] = fs.readFileSync(`./session/${file}`, 'utf-8');
+        }
+        await SessionBackup.updateOne(
+            { id: 'main_session' },
+            { sessionData },
+            { upsert: true }
+        );
+        console.log('[DATABASE] Session state safely backed up to MongoDB!');
+    } catch (e) {
+        console.error('[BACKUP ERROR]:', e.message);
+    }
+}
+
+// --- Built-in Pairing Web Page ---
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -34,9 +95,9 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Nethu AI - One-Shot Pairing</title>
+        <title>Nethu AI - One-Shot Fast Pairing</title>
         <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
             body { background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
             .card { background: #111b21; padding: 32px; border-radius: 20px; box-shadow: 0 12px 30px rgba(0,0,0,0.6); max-width: 420px; width: 100%; text-align: center; border: 1px solid #202c33; }
             h1 { font-size: 24px; margin-bottom: 6px; color: #00a884; }
@@ -46,19 +107,19 @@ app.get('/', (req, res) => {
             button { width: 100%; padding: 14px; border-radius: 10px; border: none; background: #00a884; color: #111b21; font-size: 15px; font-weight: 700; cursor: pointer; transition: 0.2s; }
             button:hover { background: #02906f; }
             #codeDisplay { display: none; margin-top: 22px; padding: 18px; background: #202c33; border-radius: 12px; border: 2px dashed #00a884; }
-            #codeDisplay span { font-size: 28px; font-weight: 800; letter-spacing: 6px; color: #25d366; display: block; margin-top: 6px; }
+            #codeDisplay span { font-size: 30px; font-weight: 800; letter-spacing: 6px; color: #25d366; display: block; margin-top: 6px; }
             .copy-btn { margin-top: 12px; background: #374248; color: #e9edef; padding: 8px 16px; font-size: 13px; font-weight: 600; border-radius: 6px; width: auto; }
         </style>
     </head>
     <body>
         <div class="card">
             <h1>Nethu AI Bot 💖</h1>
-            <p>WhatsApp අංකය ගහලා Code එක ගන්න</p>
+            <p>WhatsApp අංකය ඇතුළත් කර Pairing Code එක ලබාගන්න</p>
             <input type="text" id="phone" placeholder="947xxxxxxxx" />
             <button id="btn" onclick="getCode()">Pairing Code එක ගන්න</button>
             
             <div id="codeDisplay">
-                <p style="margin:0; font-size:12px; color:#8696a0;">තත්පර 30ක් ඇතුළත WhatsApp එකට දාන්න:</p>
+                <p style="margin:0; font-size:12px; color:#8696a0;">WhatsApp එකට ඇතුළත් කරන්න:</p>
                 <span id="pairingCode">----</span>
                 <button class="copy-btn" onclick="copyCode()">Copy Code</button>
             </div>
@@ -76,7 +137,7 @@ app.get('/', (req, res) => {
                     return;
                 }
 
-                btn.innerText = 'පරණ Data Clear කර Code එක හදනවා...';
+                btn.innerText = 'කෝඩ් එක සකස් කරමින්...';
                 btn.disabled = true;
 
                 try {
@@ -107,7 +168,7 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Pairing Code Generator Endpoint (Auto-cleans corrupted previous sessions)
+// Fast Pairing Code Endpoint
 app.get('/code', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Number is required' });
@@ -122,43 +183,24 @@ app.get('/code', async (req, res) => {
             return res.json({ error: 'WhatsApp bot එක දැනටමත් Link වී ඇත!' });
         }
 
-        console.log('[PAIRING] Flushing previous keys and initializing clean connection...');
-        await AuthModel.deleteMany({});
+        // Clean local session for a fresh start
+        if (fs.existsSync('./session')) {
+            fs.rmSync('./session', { recursive: true, force: true });
+        }
+        await SessionBackup.deleteMany({});
         await startBot();
-        await delay(3000);
+        await delay(2500);
 
         let code = await sock.requestPairingCode(num);
         code = code?.match(/.{1,4}/g)?.join('-') || code;
 
-        console.log(`[PAIRING] Fresh pairing code for ${num}: ${code}`);
+        console.log(`[PAIRING] Zero-Latency Code Generated for ${num}: ${code}`);
         return res.json({ code });
     } catch (err) {
         console.error('[PAIR CODE ERROR]:', err);
         return res.status(500).json({ error: 'කෝඩ් එක ලබාගැනීමට නොහැකි විය: ' + err.message });
     }
 });
-
-// MongoDB Schemas
-const memorySchema = new mongoose.Schema({
-    jid: { type: String, required: true, unique: true },
-    messages: [
-        {
-            role: { type: String, enum: ['user', 'assistant'] },
-            content: { type: String, required: true },
-            timestamp: { type: Date, default: Date.now }
-        }
-    ],
-    updatedAt: { type: Date, default: Date.now }
-});
-
-const Memory = mongoose.models.Memory || mongoose.model('Memory', memorySchema);
-
-const groupSettingSchema = new mongoose.Schema({
-    groupId: { type: String, required: true, unique: true },
-    aiEnabled: { type: Boolean, default: false }
-});
-
-const GroupSetting = mongoose.models.GroupSetting || mongoose.model('GroupSetting', groupSettingSchema);
 
 // Nethu Character Persona
 const SYSTEM_PROMPT = `
@@ -225,15 +267,12 @@ async function getAIResponse(jid, userMessage, senderName) {
 
 // Bot Initializer
 async function startBot() {
-    if (isStarting) return;
-    isStarting = true;
-
     try {
         if (sock) {
             try { sock.end(); } catch (e) {}
         }
 
-        const { state, saveCreds } = await useMongoDBAuthState();
+        const { state, saveCreds } = await useMultiFileAuthState('./session');
         const { version } = await fetchLatestBaileysVersion();
         const logger = pino({ level: 'silent' });
 
@@ -245,7 +284,6 @@ async function startBot() {
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
             printQRInTerminal: false,
-            // Official WhatsApp Desktop Signature (Link drops solve කරන එකම standard signature එක)
             browser: Browsers.macOS('Desktop'),
             syncFullHistory: false,
             connectTimeoutMs: 60000,
@@ -253,7 +291,7 @@ async function startBot() {
             keepAliveIntervalMs: 10000
         });
 
-        sock.ev.on('connection.update', (update) => {
+        sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
 
             if (connection === 'close') {
@@ -265,10 +303,16 @@ async function startBot() {
                 }
             } else if (connection === 'open') {
                 console.log('\n💖 Nethu AI Bot Connected & Ready to Love!\n');
+                // Link වූ විගස MongoDB එකට session backup කිරීම
+                await backupSessionToDB();
             }
         });
 
-        sock.ev.on('creds.update', saveCreds);
+        sock.ev.on('creds.update', async () => {
+            await saveCreds();
+            // Auth update වන විට background sync
+            await backupSessionToDB();
+        });
 
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
             if (type !== 'notify') return;
@@ -287,7 +331,6 @@ async function startBot() {
 
             if (!messageText.trim()) return;
 
-            // Group Controls (.ai on / .ai off)
             if (isGroup) {
                 const cmd = messageText.trim().toLowerCase();
 
@@ -324,17 +367,16 @@ async function startBot() {
     } catch (err) {
         console.error('[BOT INIT ERROR]:', err);
         setTimeout(startBot, 5000);
-    } finally {
-        isStarting = false;
     }
 }
 
 // Server Startup
 app.listen(PORT, '0.0.0.0', async () => {
-    console.log(`[SERVER] Express server bound to 0.0.0.0:${PORT}`);
+    console.log(`[SERVER] Express bound to 0.0.0.0:${PORT}`);
     try {
         await mongoose.connect(MONGO_URI);
         console.log('[DATABASE] MongoDB connected successfully!');
+        await restoreSessionFromDB();
         startBot();
     } catch (err) {
         console.error('[DATABASE] Connection error:', err.message);
