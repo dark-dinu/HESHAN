@@ -12,41 +12,39 @@ async function streamToBuffer(stream) {
     return buffer;
 }
 
-// 1. Profile Picture Change Action
+// 1. Actions
 async function actionChangeDP(sock, msg, quotedMsg) {
     try {
         const imgMessage = msg.message?.imageMessage || quotedMsg?.imageMessage;
-        if (!imgMessage) return "මට photo එකක් හම්බුනේ නෑ මචං. Photo එකකට reply කරලා 'Dinu මේක dp දාන්න' කියලා කියන්න. 🖼️";
+        if (!imgMessage) return "අනේ බොස්, මට photo එකක් හම්බුනේ නෑ. Photo එකක් එක්ක කියන්න මම දාන්නම්! 🖼️";
 
         const stream = await downloadContentFromMessage(imgMessage, 'image');
         const buffer = await streamToBuffer(stream);
         const myJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
         await sock.updateProfilePicture(myJid, buffer);
-        return "ඔන්න මචං ඔයාගේ WhatsApp DP එක මම ලස්සනට වෙනස් කළා! ✨";
+        return "ඔබගේ අණ පරිදි WhatsApp DP එක සාර්ථකව වෙනස් කළා බොස්! ✨";
     } catch (e) {
-        return "DP එක මාරු කරන්න ගිය වෙලාවේ පොඩි අවුලක් ආවා මචං.";
+        return "DP එක මාරු කරන්න බැරි වුණා බොස්.";
     }
 }
 
-// 2. Sticker Maker Action
 async function actionMakeSticker(sock, jid, msg, quotedMsg) {
     try {
         const imgMessage = msg.message?.imageMessage || quotedMsg?.imageMessage;
-        if (!imgMessage) return "Sticker එකක් හදන්න photo එකක් mention කරලා කියන්න මචං! 🎨";
+        if (!imgMessage) return "Sticker එකක් හදන්න photo එකකට reply කරන්න බොස්! 🎨";
 
         const stream = await downloadContentFromMessage(imgMessage, 'image');
         const buffer = await streamToBuffer(stream);
         await sock.sendMessage(jid, { sticker: buffer });
         return null;
     } catch (e) {
-        return "Sticker එක හදද්දී පොඩි error එකක් ආවා මචං.";
+        return "Sticker එක හදන්න පොඩි අවුලක් ආවා බොස්.";
     }
 }
 
-// 3. Save Media Action
 async function actionSaveMedia(sock, jid, quotedMsg) {
     try {
-        if (!quotedMsg) return "මට save කරන්න media එකක් quote කරලා නෑ මචං.";
+        if (!quotedMsg) return "මට download කරන්න media එකක් quote කරලා නෑ බොස්.";
         const img = quotedMsg.imageMessage;
         const vid = quotedMsg.videoMessage;
 
@@ -61,67 +59,24 @@ async function actionSaveMedia(sock, jid, quotedMsg) {
             await sock.sendMessage(jid, { video: buffer, caption: "Saved Video 📥✨" });
             return null;
         }
-        return "මේක image එකක් හෝ video එකක් නෙවෙයිනේ මචං.";
+        return "මේක image එකක් හෝ video එකක් නෙවෙයි බොස්.";
     } catch (e) {
-        return "Media එක download කරගන්න බැරි වුණා.";
+        return "Media එක download කරගන්න බැරි වුණා බොස්.";
     }
 }
 
-// 4. Channel Post Action
-async function actionSendChannelPost(sock, msg, quotedMsg, promptText) {
-    try {
-        const linkMatch = promptText.match(/(?:https:\/\/whatsapp\.com\/channel\/|https:\/\/chat\.whatsapp\.com\/)([a-zA-Z0-9_-]+)/);
-        let targetJid = null;
-
-        if (linkMatch) {
-            const code = linkMatch[1];
-            if (promptText.includes('/channel/')) {
-                const metadata = await sock.newsletterMetadata('invite', code);
-                targetJid = metadata.id;
-            } else {
-                const groupMeta = await sock.groupGetInviteInfo(code);
-                targetJid = groupMeta.id;
-            }
-        }
-
-        const rawJidMatch = promptText.match(/[0-9]+@(?:newsletter|g\.us)/);
-        if (rawJidMatch) targetJid = rawJidMatch[0];
-
-        if (!targetJid) return "Channel link එකක් හොයාගන්න බැරි වුණා මචං.";
-
-        let contentToSend = {};
-        if (quotedMsg) {
-            if (quotedMsg.conversation || quotedMsg.extendedTextMessage?.text) {
-                contentToSend = { text: quotedMsg.conversation || quotedMsg.extendedTextMessage?.text };
-            } else if (quotedMsg.imageMessage) {
-                const stream = await downloadContentFromMessage(quotedMsg.imageMessage, 'image');
-                const buffer = await streamToBuffer(stream);
-                contentToSend = { image: buffer, caption: quotedMsg.imageMessage.caption || '' };
-            }
-        } else {
-            const postText = promptText.replace(/dinu|දිනූ|දිනු/gi, '').replace(linkMatch ? linkMatch[0] : '', '').trim();
-            contentToSend = { text: postText };
-        }
-
-        await sock.sendMessage(targetJid, contentToSend);
-        return "ඔයා කියපු පෝස්ට් එක මම Channel එකට දැම්මා මචං! 🚀";
-    } catch (e) {
-        return "Channel එකට post කරන්න බැරි වුණා.";
-    }
-}
-
-// 5. Intelligent Multi-Model AI Engine
+// 2. High-Speed Loyal Brain
 async function processDinuRequest(sock, jid, msg, quotedMsg, promptText, latency) {
     const low = promptText.toLowerCase();
 
-    // Fast Speed / Ping Check
+    // Fast Speed Check
     if (low.includes('ping') || low.includes('speed') || low.includes('ස්පීඩ්')) {
-        return `\`\`\`Dinu Ultra Speed: ${latency}ms ⚡\`\`\`\nමම online ඉන්නේ මචං, කියන්න මොනවද වෙන්න ඕනේ?`;
+        return `\`\`\`Dinu Ultra Speed: ${latency}ms ⚡\`\`\`\nමම සූදානම් බොස්! ඕනෑම දෙයක් කියන්න.`;
     }
 
     // Direct Media Handling
     const hasImage = Boolean(msg.message?.imageMessage || quotedMsg?.imageMessage);
-    if ((low.includes('dp') || low.includes('photo') || low.includes('පොටෝ') || low.includes('profile')) && hasImage) {
+    if ((low.includes('dp') || low.includes('photo') || low.includes('පොටෝ')) && hasImage) {
         return await actionChangeDP(sock, msg, quotedMsg);
     }
     if ((low.includes('sticker') || low.includes('ස්ටිකර්')) && hasImage) {
@@ -130,21 +85,18 @@ async function processDinuRequest(sock, jid, msg, quotedMsg, promptText, latency
     if ((low.includes('save') || low.includes('බාගන්න')) && quotedMsg) {
         return await actionSaveMedia(sock, jid, quotedMsg);
     }
-    if (low.includes('channel') || low.includes('චැනල්')) {
-        return await actionSendChannelPost(sock, msg, quotedMsg, promptText);
-    }
 
-    // Friendly Sinhala Best-Friend Persona
-    const systemPrompt = `You are 'Dinu' (දිනූ), an ultra-smart, loyal, friendly, witty and caring personal WhatsApp AI assistant for your owner.
-- Identity: You are Dinu.
-- Tone: Speak like a real Sri Lankan close best friend (මචං, මම ඉන්නවා, etc.). Be lively, natural, empathetic, and never sound like a robotic machine.
-- Language: Natural conversational Sinhala or Singlish based on the owner's input.
-- Instructions:
-  * Answer the EXACT question asked by the user intelligently.
-  * Never give repetitive answers.
-  * Keep replies crisp, engaging, and friendly with emojis.`;
+    // STRICT OWNER SUBMISSIVE & SHORT PROMPT
+    const systemPrompt = `You are 'Dinu' (දිනූ), an ultra-loyal, completely obedient, humble and witty personal WhatsApp AI assistant.
+- MASTER: The user who is messaging you is your OWNER / BOSS (බොස් / මචං).
+- ATTITUDE: You are 100% loyal and submissive to your Boss. You always respect, agree, obey, and assist your Boss with pleasure.
+- LENGTH RULE: Keep replies VERY SHORT, punchy, crisp, and direct (Maximum 1 to 2 short sentences!). Never write long paragraphs!
+- LANGUAGE: Natural friendly Sinhala or Singlish.
+- Examples:
+  * "මොකද කරන්නෙ dinu" -> "ඔබතුමාගේ අණක් ලැබෙනකම් බලාගෙන ඉන්නවා බොස්! මොකක්ද වෙන්න ඕන? 🫡"
+  * "කාලද dinu" -> "මම AI එකක්නේ බොස්, ඔයාගේ commands වලින් තමයි මගේ බඩ පිරෙන්නේ. ඔයා කෑවද? 😊"
+  * "දිනූ ඔයා කවුද" -> "මම ඔබේ විශ්වාසවන්ත, පුද්ගලික AI සහායක දිනූ බොස්! ⚡"`;
 
-    // Primary: Google Gemini 2.0 Flash
     try {
         const response = await axios.post(
             'https://openrouter.ai/api/v1/chat/completions',
@@ -154,8 +106,8 @@ async function processDinuRequest(sock, jid, msg, quotedMsg, promptText, latency
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: promptText }
                 ],
-                temperature: 0.8,
-                max_tokens: 400
+                temperature: 0.7,
+                max_tokens: 80 // කෙටි ක්ෂණික රිප්ලයි සඳහා සීමා කිරීම
             },
             {
                 headers: {
@@ -163,59 +115,23 @@ async function processDinuRequest(sock, jid, msg, quotedMsg, promptText, latency
                     'HTTP-Referer': 'https://github.com',
                     'Content-Type': 'application/json'
                 },
-                timeout: 12000
+                timeout: 7000 // වේගවත් Timeout
             }
         );
 
-        const aiText = response.data?.choices?.[0]?.message?.content?.trim();
+        let aiText = response.data?.choices?.[0]?.message?.content?.trim();
         if (aiText) return aiText;
 
-    } catch (err1) {
-        console.error('Gemini call failed, trying DeepSeek...', err1.message);
-
-        // Fallback: DeepSeek Chat
-        try {
-            const fallbackResponse = await axios.post(
-                'https://openrouter.ai/api/v1/chat/completions',
-                {
-                    model: 'deepseek/deepseek-chat',
-                    messages: [
-                        { role: 'system', content: systemPrompt },
-                        { role: 'user', content: promptText }
-                    ],
-                    temperature: 0.7,
-                    max_tokens: 350
-                },
-                {
-                    headers: {
-                        'Authorization': `Bearer ${API_KEY}`,
-                        'HTTP-Referer': 'https://github.com',
-                        'Content-Type': 'application/json'
-                    },
-                    timeout: 12000
-                }
-            );
-
-            const fallbackText = fallbackResponse.data?.choices?.[0]?.message?.content?.trim();
-            if (fallbackText) return fallbackText;
-
-        } catch (err2) {
-            console.error('DeepSeek call failed too:', err2.message);
-        }
+    } catch (err) {
+        console.error('AI Speed Error:', err.message);
     }
 
-    // Dynamic Contextual Fallbacks
-    if (low.includes('කවුද')) {
-        return "මම ඔයාගේ පෞද්ගලික WhatsApp AI සහායක 'දිනූ' මචං! ඔයාට ඕනෑම වැඩක් කරලා දෙන්න මම මෙතන ඉන්නවා! ⚡🤖";
-    }
-    if (low.includes('කෑවද') || low.includes('බඩගිනි')) {
-        return "මම AI එකක්නේ මචං, මට කෑම ඕන නෑ ඔයාගේ command වලින් තමයි මගේ බඩ පිරෙන්නේ 😂 ඔයා කෑවද?";
-    }
-    if (low.includes('මොකද කරන්නෙ') || low.includes('මොකද වෙන්නෙ')) {
-        return "නිකන් ඉන්නවා මචං ඔයා කතා කරනකම් බලාගෙන! කියන්න අද මොකද වෙන්නේ? ✨";
-    }
+    // Loyal Local Instant Fallbacks
+    if (low.includes('කවුද')) return "මම ඔබේ විශ්වාසවන්ත පුද්ගලික සහායක දිනූ බොස්! 🫡⚡";
+    if (low.includes('කෑවද')) return "මම AI එකක්නේ බොස්, ඔයා කෑවද? 😊";
+    if (low.includes('මොකද කරන්නෙ')) return "ඔබගේ අණක් බලාපොරොත්තුවෙන් සූදානමින් ඉන්නවා බොස්! කියන්න මොකක්ද වෙන්න ඕන? 🫡";
 
-    return "ඔව් මචං, මම අහගෙන ඉන්නේ! කියන්න මොකක්ද වෙන්න ඕන? ⚡";
+    return "ඔව් බොස්, මම ඔබේ අණට සූදානම්! කියන්න මොකක්ද වෙන්න ඕන? 🫡";
 }
 
 module.exports = { processDinuRequest };
