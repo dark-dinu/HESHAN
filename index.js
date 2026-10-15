@@ -7,7 +7,10 @@ import mongoose from 'mongoose';
 import fs from 'fs';
 import path from 'path';
 
-// ESM compatibility: Default සහ named export දෙකම ආරක්ෂිතව extract කිරීම
+// Native JavaScript delay function (Baileys export මත රඳා නොපවතී)
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// ESM compatibility
 const baileysModule = baileys.default || baileys;
 const makeWASocket = baileysModule.default || baileysModule;
 const {
@@ -15,8 +18,7 @@ const {
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     useMultiFileAuthState,
-    Browsers,
-    delay
+    Browsers
 } = baileysModule;
 
 const PORT = process.env.PORT || 10000;
@@ -191,7 +193,7 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Pairing Code Generator Endpoint
+// Pairing Code Endpoint
 app.get('/code', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Number is required' });
@@ -205,6 +207,7 @@ app.get('/code', async (req, res) => {
         await resetAllSessions();
         await startBot();
 
+        // Native delay
         await delay(3000);
 
         let code = await sock.requestPairingCode(num);
