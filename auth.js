@@ -8,7 +8,7 @@ const authSchema = new mongoose.Schema({
     data: { type: String, required: true }
 });
 
-const AuthModel = mongoose.models.AuthSession || mongoose.model('AuthSession', authSchema);
+export const AuthModel = mongoose.models.AuthSession || mongoose.model('AuthSession', authSchema);
 
 export const useMongoDBAuthState = async () => {
     const writeData = async (data, id) => {
