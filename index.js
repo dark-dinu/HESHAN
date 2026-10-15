@@ -21,7 +21,7 @@ const messageStore = new Map();
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Auto reset broken session & generate pairing code directly
+// 1. ISOLATED FRESH PAIRING ENDPOINT
 app.get('/pair', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Phone number is required' });
@@ -29,31 +29,46 @@ app.get('/pair', async (req, res) => {
     num = num.replace(/[^0-9]/g, '');
 
     try {
-        // පරණ session data තිබුණොත් clean කරලා fresh socket එකකින් code එක ගැනීම
-        if (sock?.authState?.creds?.registered) {
-            try {
-                const AuthModel = mongoose.model('SessionData');
-                await AuthModel.deleteMany({});
-                console.log('Old session purged. Initializing fresh pairing socket...');
-                sock.authState.creds = initAuthCreds();
-            } catch (e) {}
-        }
+        // පරණ session එක DB එකෙන් ඉවත් කිරීම
+        try {
+            const AuthModel = mongoose.model('SessionData');
+            await AuthModel.deleteMany({});
+        } catch (e) {}
 
-        if (!sock) {
-            return res.status(503).json({ error: 'Bot engine is starting up. Wait 3 seconds and click again.' });
-        }
+        const { state, saveCreds } = await useMongoDBAuthState();
+        const { version } = await fetchLatestBaileysVersion();
 
-        // Wait brief moment for socket readiness
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        // Fresh standalone socket for pairing only
+        const pairSock = makeWASocket({
+            version,
+            logger: pino({ level: 'fatal' }),
+            auth: state,
+            syncFullHistory: false,
+            markOnlineOnConnect: false
+        });
 
-        const code = await sock.requestPairingCode(num);
+        pairSock.ev.on('creds.update', saveCreds);
+
+        // Wait 2.5 seconds for WhatsApp handshake
+        await new Promise(resolve => setTimeout(resolve, 2500));
+
+        const code = await pairSock.requestPairingCode(num);
         const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
-        
-        console.log(`✅ Pairing Code successfully generated: ${formattedCode}`);
+
+        // Code එක ලැබුණු පසු Background එකෙන් main bot එක start වීම
+        pairSock.ev.on('connection.update', async (update) => {
+            const { connection } = update;
+            if (connection === 'open') {
+                console.log('✅ Paired & WhatsApp connected successfully!');
+                sock = pairSock;
+                setupMessageListener(sock);
+            }
+        });
+
         return res.json({ code: formattedCode });
 
     } catch (err) {
-        console.error('Pairing Code Generation Error:', err);
+        console.error('Pairing Error:', err);
         return res.status(500).json({ error: 'Failed: ' + (err.message || 'Please try again') });
     }
 });
@@ -67,6 +82,25 @@ app.listen(PORT, () => {
     console.log(`🚀 Web server listening on port ${PORT}`);
 });
 
+function setupMessageListener(activeSock) {
+    activeSock.ev.on('messages.upsert', (msgUpdate) => {
+        for (const m of msgUpdate.messages || []) {
+            if (m.key?.id && m.message) {
+                messageStore.set(m.key.id, m.message);
+                if (messageStore.size > 500) {
+                    const oldestKey = messageStore.keys().next().value;
+                    messageStore.delete(oldestKey);
+                }
+            }
+        }
+
+        if (msgUpdate.type === 'notify') {
+            handleMessage(activeSock, msgUpdate);
+        }
+    });
+}
+
+// 2. MAIN ENGINE AUTO-BOOT (For existing valid session)
 async function startBot() {
     try {
         if (!isInitialized) {
@@ -75,6 +109,13 @@ async function startBot() {
         }
 
         const { state, saveCreds } = await useMongoDBAuthState();
+        
+        // Session එකක් දැනටමත් නැත්නම් Pair site එකෙන් code එක ගන්නා තෙක් wait කිරීම
+        if (!state.creds?.registered && !state.creds?.me) {
+            console.log('⚡ No active session found. Waiting for pairing via web...');
+            return;
+        }
+
         const { version } = await fetchLatestBaileysVersion();
 
         sock = makeWASocket({
@@ -98,12 +139,11 @@ async function startBot() {
 
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                if (shouldReconnect) {
+                if (statusCode !== DisconnectReason.loggedOut) {
                     setTimeout(startBot, 3000);
                 }
             } else if (connection === 'open') {
-                console.log('✅ WhatsApp connection opened successfully!');
+                console.log('✅ WhatsApp connected!');
                 try {
                     const myNumber = (sock.user?.id ? sock.user.id.split(':')[0] : '') + '@s.whatsapp.net';
                     if (myNumber.length > 15) {
@@ -113,25 +153,10 @@ async function startBot() {
             }
         });
 
-        sock.ev.on('messages.upsert', (msgUpdate) => {
-            for (const m of msgUpdate.messages || []) {
-                if (m.key?.id && m.message) {
-                    messageStore.set(m.key.id, m.message);
-                    if (messageStore.size > 500) {
-                        const oldestKey = messageStore.keys().next().value;
-                        messageStore.delete(oldestKey);
-                    }
-                }
-            }
-
-            if (msgUpdate.type === 'notify') {
-                handleMessage(sock, msgUpdate);
-            }
-        });
+        setupMessageListener(sock);
 
     } catch (err) {
         console.error('Bot Startup Error:', err);
-        setTimeout(startBot, 5000);
     }
 }
 
