@@ -1,7 +1,7 @@
 {
-  "name": "heshan-ai-bot",
-  "version": "3.0.0",
-  "description": "Smart WhatsApp AI Assistant named Heshan",
+  "name": "dinu-assistant",
+  "version": "2.0.0",
+  "description": "Super Autonomous Private WhatsApp Assistant",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
