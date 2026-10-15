@@ -86,7 +86,6 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Render 24/7 Keep-Alive Ping
 app.get('/ping-server', (req, res) => {
     res.send('Server is alive! ⚡');
 });
@@ -95,7 +94,6 @@ const PORT = process.env.PORT || config.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Web server listening on port ${PORT}`);
     
-    // Auto Keep-Alive every 5 mins to prevent Render Sleep
     setInterval(() => {
         try {
             https.get(`https://heshan-zh7a.onrender.com/ping-server`, () => {});
@@ -104,19 +102,21 @@ app.listen(PORT, () => {
 });
 
 function setupMessageListener(activeSock) {
-    activeSock.ev.on('messages.upsert', (msgUpdate) => {
-        for (const m of msgUpdate.messages || []) {
-            if (m.key?.id && m.message) {
-                messageStore.set(m.key.id, m.message);
-                if (messageStore.size > 500) {
-                    const oldestKey = messageStore.keys().next().value;
-                    messageStore.delete(oldestKey);
+    activeSock.ev.on('messages.upsert', async (msgUpdate) => {
+        try {
+            for (const m of msgUpdate.messages || []) {
+                if (m.key?.id && m.message) {
+                    messageStore.set(m.key.id, m.message);
+                    if (messageStore.size > 500) {
+                        const oldestKey = messageStore.keys().next().value;
+                        messageStore.delete(oldestKey);
+                    }
                 }
             }
+            await handleMessage(activeSock, msgUpdate);
+        } catch (e) {
+            console.error('Upsert Listener Error:', e);
         }
-
-        // CRUCIAL FIX: Allow both 'notify' and 'append' so Self-Messages are captured!
-        handleMessage(activeSock, msgUpdate);
     });
 }
 
@@ -159,7 +159,7 @@ async function startBot() {
                     setTimeout(startBot, 3000);
                 }
             } else if (connection === 'open') {
-                console.log('✅ WhatsApp connection resumed!');
+                console.log('✅ WhatsApp connection resumed & active!');
             }
         });
 
