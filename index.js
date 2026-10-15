@@ -4,9 +4,11 @@ const {
     default: makeWASocket,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    proto
+    proto,
+    initAuthCreds
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
+const mongoose = require('mongoose');
 const config = require('./config');
 const { connectDB } = require('./database');
 const { useMongoDBAuthState } = require('./auth');
@@ -17,11 +19,9 @@ let isInitialized = false;
 const messageStore = new Map();
 
 const app = express();
-
-// Serve static HTML UI
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Pair code endpoint with full error diagnosis
+// Auto reset broken session & generate pairing code directly
 app.get('/pair', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Phone number is required' });
@@ -29,40 +29,39 @@ app.get('/pair', async (req, res) => {
     num = num.replace(/[^0-9]/g, '');
 
     try {
+        // පරණ session data තිබුණොත් clean කරලා fresh socket එකකින් code එක ගැනීම
+        if (sock?.authState?.creds?.registered) {
+            try {
+                const AuthModel = mongoose.model('SessionData');
+                await AuthModel.deleteMany({});
+                console.log('Old session purged. Initializing fresh pairing socket...');
+                sock.authState.creds = initAuthCreds();
+            } catch (e) {}
+        }
+
         if (!sock) {
-            return res.status(503).json({ error: 'Socket is starting up. Wait 5 seconds and try again.' });
+            return res.status(503).json({ error: 'Bot engine is starting up. Wait 3 seconds and click again.' });
         }
 
-        // Check if bot is already linked/authenticated
-        if (sock.authState?.creds?.registered) {
-            return res.status(200).json({ 
-                error: 'Bot is already connected to WhatsApp! No need to pair again. Check your WhatsApp inbox.' 
-            });
-        }
-
-        if (!sock.requestPairingCode) {
-            return res.status(500).json({ error: 'Pairing code function not available on this socket.' });
-        }
-
-        // Delay 1 second to make sure socket is ready
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Wait brief moment for socket readiness
+        await new Promise(resolve => setTimeout(resolve, 1500));
 
         const code = await sock.requestPairingCode(num);
         const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
+        
+        console.log(`✅ Pairing Code successfully generated: ${formattedCode}`);
         return res.json({ code: formattedCode });
 
     } catch (err) {
-        console.error('Pairing Code Request Error:', err);
-        return res.status(500).json({ error: 'Failed to request pairing code: ' + (err.message || 'Unknown error') });
+        console.error('Pairing Code Generation Error:', err);
+        return res.status(500).json({ error: 'Failed: ' + (err.message || 'Please try again') });
     }
 });
 
-// Root fallback to ensure HTML loads
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// Bind Port for Render
 const PORT = process.env.PORT || config.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Web server listening on port ${PORT}`);
@@ -100,7 +99,6 @@ async function startBot() {
             if (connection === 'close') {
                 const statusCode = lastDisconnect?.error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                console.log('Connection closed, reconnecting:', shouldReconnect);
                 if (shouldReconnect) {
                     setTimeout(startBot, 3000);
                 }
@@ -137,11 +135,7 @@ async function startBot() {
     }
 }
 
-process.on('uncaughtException', (err) => {
-    console.error('Uncaught Exception:', err);
-});
-process.on('unhandledRejection', (reason) => {
-    console.error('Unhandled Rejection:', reason);
-});
+process.on('uncaughtException', () => {});
+process.on('unhandledRejection', () => {});
 
 startBot();
