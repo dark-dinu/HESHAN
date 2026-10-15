@@ -1,59 +1,59 @@
 const { processDinuRequest } = require('./dinu_agent');
 
-async function handleMessage(sock, msgUpdate) {
+async function handleMessage(sock, msg) {
     try {
-        if (!msgUpdate.messages || msgUpdate.messages.length === 0) return;
+        if (!msg || !msg.message) return;
 
-        for (const msg of msgUpdate.messages) {
-            if (!msg.message) continue;
+        const jid = msg.key.remoteJid;
+        if (!jid || jid === 'status@broadcast') return;
 
-            const jid = msg.key.remoteJid;
-            if (!jid || jid === 'status@broadcast') continue;
+        // Unpack wrappers (Ephemeral / ViewOnce / Document)
+        let m = msg.message;
+        if (m.ephemeralMessage) m = m.ephemeralMessage.message;
+        if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
+        if (m.documentWithCaptionMessage) m = m.documentWithCaptionMessage.message;
 
-            let m = msg.message;
-            if (m.ephemeralMessage) m = m.ephemeralMessage.message;
-            if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
+        // Extract Text
+        const text = (m.conversation || 
+                      m.extendedTextMessage?.text || 
+                      m.imageMessage?.caption || 
+                      m.videoMessage?.caption || '').trim();
 
-            const text = (m.conversation || 
-                          m.extendedTextMessage?.text || 
-                          m.imageMessage?.caption || 
-                          m.videoMessage?.caption || '').trim();
+        if (!text) return;
 
-            if (!text) continue;
+        // 1. Terminal එකේ අනිවාර්යයෙන්ම print වෙන්න Log එකක්
+        console.log(`\n===================================`);
+        console.log(`📩 INCOMING MSG DETECTED: "${text}"`);
+        console.log(`📍 From: ${jid} | fromMe: ${msg.key.fromMe}`);
+        console.log(`===================================\n`);
 
-            // Trigger Check
-            const hasDinu = /dinu|දිනූ|දිනු/i.test(text);
-            if (!hasDinu) continue;
+        // 2. Trigger check ("dinu" හෝ "දිනූ" තිබේදැයි බැලීම)
+        const hasDinu = /dinu|දිනූ|දිනු/i.test(text);
+        if (!hasDinu) return;
 
-            // Owner Check
-            const myJidNum = sock.user?.id ? sock.user.id.split(':')[0].replace(/[^0-9]/g, '') : '';
-            const senderNum = (msg.key.participant || jid).split(':')[0].replace(/[^0-9]/g, '');
-            const isOwner = Boolean(msg.key.fromMe) || (myJidNum && senderNum === myJidNum) || jid.includes(myJidNum);
+        // 3. Typing indicator එක යැවීම
+        await sock.sendPresenceUpdate('composing', jid).catch(() => {});
 
-            if (!isOwner) continue;
-
-            console.log(`📩 Triggered: "${text}"`);
-
-            await sock.sendPresenceUpdate('composing', jid).catch(() => {});
-
-            const quoted = m.extendedTextMessage?.contextInfo?.quotedMessage;
-            let quotedMsg = null;
-            if (quoted) {
-                quotedMsg = quoted.ephemeralMessage?.message || quoted.viewOnceMessageV2?.message || quoted;
-            }
-
-            const latency = 15;
-            const reply = await processDinuRequest(sock, jid, msg, quotedMsg, text, latency);
-
-            await sock.sendPresenceUpdate('paused', jid).catch(() => {});
-
-            if (reply) {
-                await sock.sendMessage(jid, { text: reply }, { quoted: msg });
-                console.log(`📤 Replied: "${reply.slice(0, 30)}..."`);
-            }
+        // Quoted message අහු කරගැනීම
+        const quoted = m.extendedTextMessage?.contextInfo?.quotedMessage;
+        let quotedMsg = null;
+        if (quoted) {
+            quotedMsg = quoted.ephemeralMessage?.message || quoted.viewOnceMessageV2?.message || quoted;
         }
+
+        // Process Reply
+        const latency = 10;
+        const reply = await processDinuRequest(sock, jid, msg, quotedMsg, text, latency);
+
+        await sock.sendPresenceUpdate('paused', jid).catch(() => {});
+
+        if (reply) {
+            await sock.sendMessage(jid, { text: reply }, { quoted: msg });
+            console.log(`📤 [REPLY SENT TO WHATSAPP]: "${reply}"\n`);
+        }
+
     } catch (err) {
-        console.error('Handler Error:', err);
+        console.error('Handler execution error:', err);
     }
 }
 
