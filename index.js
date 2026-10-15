@@ -1,4 +1,4 @@
-import pkg from '@whiskeysockets/baileys';
+import baileys from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import axios from 'axios';
@@ -7,7 +7,9 @@ import mongoose from 'mongoose';
 import fs from 'fs';
 import path from 'path';
 
-const makeWASocket = pkg.default?.default || pkg.default || pkg;
+// ESM compatibility: Default සහ named export දෙකම ආරක්ෂිතව extract කිරීම
+const baileysModule = baileys.default || baileys;
+const makeWASocket = baileysModule.default || baileysModule;
 const {
     DisconnectReason,
     fetchLatestBaileysVersion,
@@ -15,7 +17,7 @@ const {
     useMultiFileAuthState,
     Browsers,
     delay
-} = pkg;
+} = baileysModule;
 
 const PORT = process.env.PORT || 10000;
 const OPENROUTER_API_KEY = "Sk-or-v1-49e4e4ecd1ad03c590399fa189e608e277356eb1d76686bdf986a40201c3596b";
@@ -200,11 +202,9 @@ app.get('/code', async (req, res) => {
     }
 
     try {
-        // පරණ අවුල් වූ sessions සම්පූර්ණයෙන්ම clear කර fresh socket එකක් සෑදීම
         await resetAllSessions();
         await startBot();
 
-        // Socket එක WhatsApp WebSocket එකට handshake වන තෙක් තත්පර 3ක delay එකක්
         await delay(3000);
 
         let code = await sock.requestPairingCode(num);
@@ -300,7 +300,6 @@ async function startBot() {
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
             printQRInTerminal: false,
-            // Official Multi-Device Desktop Signature
             browser: Browsers.macOS('Desktop'),
             syncFullHistory: false,
             connectTimeoutMs: 60000,
@@ -392,7 +391,6 @@ app.listen(PORT, '0.0.0.0', async () => {
         await mongoose.connect(MONGO_URI);
         console.log('[DATABASE] MongoDB connected successfully!');
         
-        // පරණ session තිබේ නම් restore කර bot start කිරීම
         await restoreSessionFromDB();
         startBot();
     } catch (err) {
