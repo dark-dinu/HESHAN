@@ -29,6 +29,7 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 let sock = null;
+let socketGen = 0; // identifies the "current" socket so old ones can't trigger reconnects
 
 // --- Database Schemas ---
 const multiSessionSchema = new mongoose.Schema({
@@ -64,11 +65,7 @@ async function syncSessionToDB() {
             const filePath = path.join(SESSION_DIR, file);
             if (fs.lstatSync(filePath).isFile()) {
                 const data = fs.readFileSync(filePath, 'utf-8');
-                await MultiSession.updateOne(
-                    { key: file },
-                    { value: data },
-                    { upsert: true }
-                );
+                await MultiSession.updateOne({ key: file }, { value: data }, { upsert: true });
             }
         }
     } catch (e) {
@@ -80,9 +77,7 @@ async function restoreSessionFromDB() {
     try {
         const records = await MultiSession.find({});
         if (records.length > 0) {
-            if (!fs.existsSync(SESSION_DIR)) {
-                fs.mkdirSync(SESSION_DIR, { recursive: true });
-            }
+            if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR, { recursive: true });
             for (const item of records) {
                 fs.writeFileSync(path.join(SESSION_DIR, item.key), item.value);
             }
@@ -113,6 +108,7 @@ app.get('/', (req, res) => {
             input { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #2a3942; background: #202c33; color: #fff; font-size: 16px; margin-bottom: 16px; outline: none; text-align: center; letter-spacing: 1px; }
             input:focus { border-color: #00a884; }
             button { width: 100%; padding: 14px; border-radius: 10px; border: none; background: #00a884; color: #111b21; font-size: 15px; font-weight: 700; cursor: pointer; transition: 0.2s; }
+            button:disabled { opacity: .6; }
             button:hover { background: #02906f; }
             #codeDisplay { display: none; margin-top: 22px; padding: 18px; background: #202c33; border-radius: 12px; border: 2px dashed #00a884; }
             #codeDisplay span { font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #25d366; display: block; margin-top: 6px; }
@@ -123,11 +119,11 @@ app.get('/', (req, res) => {
         <div class="card">
             <h1>Nethu AI Bot 💖</h1>
             <p>WhatsApp අංකය ඇතුළත් කර Pairing Code එක ගන්න</p>
-            <input type="text" id="phone" placeholder="947xxxxxxxx" />
+            <input type="tel" id="phone" placeholder="947xxxxxxxx" />
             <button id="btn" onclick="getCode()">Pairing Code එක ගන්න</button>
-            
+
             <div id="codeDisplay">
-                <p style="margin:0; font-size:12px; color:#8696a0;">තත්පර 30ක් ඇතුළත WhatsApp එකට Enter කරන්න:</p>
+                <p style="margin:0; font-size:12px; color:#8696a0;">WhatsApp → Linked Devices → Link with phone number වලට මේ code එක Enter කරන්න:</p>
                 <span id="pairingCode">----</span>
                 <button class="copy-btn" onclick="copyCode()">Copy Code</button>
             </div>
@@ -149,7 +145,7 @@ app.get('/', (req, res) => {
                 btn.disabled = true;
 
                 try {
-                    const res = await fetch('/code?number=' + encodeURI(phone));
+                    const res = await fetch('/code?number=' + encodeURIComponent(phone));
                     const data = await res.json();
                     if (data.code) {
                         display.style.display = 'block';
@@ -157,7 +153,7 @@ app.get('/', (req, res) => {
                     } else {
                         alert(data.error || 'ගැටලුවක් මතු විය. නැවත උත්සාහ කරන්න.');
                     }
-                } catch(e) {
+                } catch (e) {
                     alert('Error: ' + e.message);
                 } finally {
                     btn.innerText = 'Pairing Code එක ගන්න';
@@ -176,39 +172,53 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Pairing Code Generator Endpoint (Null Proof)
+// Pairing Code Generator Endpoint
+let pairingBusy = false;
+
 app.get('/code', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Number is required' });
 
-    num = num.replace(/[^0-9]/g, '');
-    if (num.startsWith('0')) {
-        num = '94' + num.slice(1);
+    num = String(num).replace(/[^0-9]/g, '');
+    if (num.startsWith('0')) num = '94' + num.slice(1);
+
+    if (pairingBusy) {
+        return res.status(429).json({ error: 'තව code එකක් හදමින් පවතී. තත්පර කිහිපයකින් නැවත උත්සාහ කරන්න.' });
     }
+    pairingBusy = true;
 
     try {
-        // පරණ session folder එක සහ DB records ක්ලියර් කර fresh start එකක් ගැනීම
+        // Stop the old socket first (without it reconnecting), then wipe old session
+        socketGen++;
+        if (sock) {
+            try { sock.ev.removeAllListeners(); sock.end(undefined); } catch (e) {}
+            sock = null;
+        }
         if (fs.existsSync(SESSION_DIR)) {
             fs.rmSync(SESSION_DIR, { recursive: true, force: true });
         }
         await MultiSession.deleteMany({});
 
-        // අලුත් socket instance එකක් හදලා ready වෙනකල් බලා සිටීම
+        // Fresh socket
         sock = await createNewSocket();
-        await delay(3500);
 
-        if (!sock) {
-            return res.status(500).json({ error: 'Socket එක සෑදීමට නොහැකි විය. නැවත උත්සාහ කරන්න.' });
+        // Give the socket a moment to open its connection to WhatsApp
+        await delay(4000);
+
+        if (sock.authState?.creds?.registered) {
+            return res.status(400).json({ error: 'මේ session එක දැනටමත් link වෙලා ඇත.' });
         }
 
         let code = await sock.requestPairingCode(num);
         code = code?.match(/.{1,4}/g)?.join('-') || code;
 
-        console.log(`[PAIRING] New Pairing Code generated for ${num}: ${code}`);
+        console.log(`[PAIRING] Pairing code for ${num}: ${code}`);
         return res.json({ code });
     } catch (err) {
         console.error('[PAIR CODE ERROR]:', err);
         return res.status(500).json({ error: 'කෝඩ් එක ලබාගැනීමට නොහැකි විය: ' + err.message });
+    } finally {
+        pairingBusy = false;
     }
 });
 
@@ -226,11 +236,9 @@ const SYSTEM_PROMPT = `
 async function getAIResponse(jid, userMessage, senderName) {
     try {
         let userMem = await Memory.findOne({ jid });
-        if (!userMem) {
-            userMem = new Memory({ jid, messages: [] });
-        }
+        if (!userMem) userMem = new Memory({ jid, messages: [] });
 
-        const recentHistory = userMem.messages.slice(-10).map(m => ({
+        const recentHistory = userMem.messages.slice(-10).map((m) => ({
             role: m.role,
             content: m.content
         }));
@@ -250,21 +258,20 @@ async function getAIResponse(jid, userMessage, senderName) {
             },
             {
                 headers: {
-                    'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
+                    Authorization: `Bearer ${OPENROUTER_API_KEY}`,
                     'Content-Type': 'application/json'
                 },
                 timeout: 30000
             }
         );
 
-        const aiReply = response.data?.choices?.[0]?.message?.content?.trim() || 'අනේ මට ඔයාව තේරුණේ නෑ මගෙ රත්තරං.. ආයෙ කියන්නකෝ.. 🥺❤️';
+        const aiReply =
+            response.data?.choices?.[0]?.message?.content?.trim() ||
+            'අනේ මට ඔයාව තේරුණේ නෑ මගෙ රත්තරං.. ආයෙ කියන්නකෝ.. 🥺❤️';
 
         userMem.messages.push({ role: 'user', content: userMessage });
         userMem.messages.push({ role: 'assistant', content: aiReply });
-
-        if (userMem.messages.length > 20) {
-            userMem.messages = userMem.messages.slice(-20);
-        }
+        if (userMem.messages.length > 20) userMem.messages = userMem.messages.slice(-20);
         userMem.updatedAt = new Date();
         await userMem.save();
 
@@ -277,8 +284,11 @@ async function getAIResponse(jid, userMessage, senderName) {
 
 // Socket Creator Function
 async function createNewSocket() {
+    const myGen = ++socketGen;
+
     if (sock) {
-        try { sock.end(); } catch (e) {}
+        try { sock.ev.removeAllListeners(); sock.end(undefined); } catch (e) {}
+        sock = null;
     }
 
     const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
@@ -296,19 +306,34 @@ async function createNewSocket() {
         browser: Browsers.macOS('Desktop'),
         syncFullHistory: false,
         connectTimeoutMs: 60000,
-        defaultQueryTimeoutMs: 0,
+        defaultQueryTimeoutMs: undefined,
         keepAliveIntervalMs: 10000
     });
+
+    sock = newSock;
 
     newSock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
-            const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
+            // Ignore events from outdated sockets
+            if (myGen !== socketGen) return;
+
+            const statusCode = (lastDisconnect?.error instanceof Boom)
+                ? lastDisconnect.error.output?.statusCode
+                : undefined;
             const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
             console.log(`[CONNECTION] Closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
+
             if (shouldReconnect) {
-                setTimeout(createNewSocket, 4000);
+                // 515 (restartRequired) is normal right after pairing succeeds
+                setTimeout(() => {
+                    if (myGen === socketGen) {
+                        createNewSocket().catch((e) => console.error('[RECONNECT ERROR]:', e.message));
+                    }
+                }, 3000);
+            } else {
+                console.log('[CONNECTION] Logged out. Please pair again from the web page.');
             }
         } else if (connection === 'open') {
             console.log('\n💖 Nethu AI Bot Connected & Ready to Love!\n');
@@ -325,9 +350,11 @@ async function createNewSocket() {
         if (type !== 'notify') return;
 
         const msg = messages[0];
-        if (!msg.message || msg.key.fromMe) return;
+        if (!msg?.message || msg.key.fromMe) return;
 
         const from = msg.key.remoteJid;
+        if (!from || from === 'status@broadcast') return;
+
         const isGroup = from.endsWith('@g.us');
         const senderName = msg.pushName || 'මගෙ ආදරේ';
 
@@ -342,21 +369,13 @@ async function createNewSocket() {
             const cmd = messageText.trim().toLowerCase();
 
             if (cmd === '.ai on') {
-                await GroupSetting.findOneAndUpdate(
-                    { groupId: from },
-                    { aiEnabled: true },
-                    { upsert: true }
-                );
+                await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: true }, { upsert: true });
                 await newSock.sendMessage(from, { text: 'Nethu ඔයාලා හැමෝටම ආදරේ දෙන්න ආවා පැටියෝ! 🥰✨' }, { quoted: msg });
                 return;
             }
 
             if (cmd === '.ai off') {
-                await GroupSetting.findOneAndUpdate(
-                    { groupId: from },
-                    { aiEnabled: false },
-                    { upsert: true }
-                );
+                await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: false }, { upsert: true });
                 await newSock.sendMessage(from, { text: 'මම මේ group එකෙන් අයින් වෙලා ඉන්නම් එහෙනම්.. බායි මගෙ රත්තරංලා! 🥺👋' }, { quoted: msg });
                 return;
             }
@@ -381,10 +400,10 @@ app.listen(PORT, '0.0.0.0', async () => {
     try {
         await mongoose.connect(MONGO_URI);
         console.log('[DATABASE] MongoDB connected successfully!');
-        
+
         const hasSession = await restoreSessionFromDB();
         if (hasSession) {
-            sock = await createNewSocket();
+            await createNewSocket();
         }
     } catch (err) {
         console.error('[DATABASE] Connection error:', err.message);
