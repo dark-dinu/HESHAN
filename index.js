@@ -12,22 +12,22 @@ const {
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     useMultiFileAuthState,
-    Browsers
+    Browsers,
+    delay
 } = pkg;
 
 const PORT = process.env.PORT || 10000;
-const OPENROUTER_API_KEY = "Sk-or-v1-49e4e4ecd1ad03c590399fa189e608e277356eb1d76686bdf986a40201c3596b";
-const MONGO_URI = "mongodb+srv://diniduheshan40_db_user:Heshan2007@cluster0.5gazebm.mongodb.net/?appName=Cluster0";
-
-// මෙතනට ඔයාගේ WhatsApp අංකය දාන්න (උදා: 947xxxxxxxx)
-const BOT_NUMBER = (process.env.BOT_NUMBER || '94770000000').replace(/[^0-9]/g, '');
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "Sk-or-v1-49e4e4ecd1ad03c590399fa189e608e277356eb1d76686bdf986a40201c3596b";
+const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://diniduheshan40_db_user:Heshan2007@cluster0.5gazebm.mongodb.net/?appName=Cluster0";
 
 const app = express();
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 let sock = null;
-let latestPairingCode = 'Generating... (රැඳී සිටින්න)';
 let isLinked = false;
 
-// --- Web UI (Pairing Code එක බලාගැනීමට) ---
+// --- Web UI ---
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -35,40 +35,133 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <meta http-equiv="refresh" content="5">
-        <title>Nethu AI - One-Shot Pairing</title>
+        <title>Nethu AI - WhatsApp Pairing</title>
         <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
-            body { background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
-            .card { background: #111b21; padding: 32px; border-radius: 20px; box-shadow: 0 12px 30px rgba(0,0,0,0.6); max-width: 440px; width: 100%; text-align: center; border: 1px solid #202c33; }
-            h1 { font-size: 24px; margin-bottom: 6px; color: #00a884; }
-            p { font-size: 13px; color: #8696a0; margin-bottom: 20px; }
-            .box { padding: 20px; background: #202c33; border-radius: 12px; border: 2px dashed #00a884; margin-bottom: 16px; }
-            .code { font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #25d366; display: block; }
-            .status { font-size: 14px; font-weight: 600; color: #38bdf8; }
-            .btn { background: #00a884; color: #111b21; border: none; padding: 10px 20px; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 10px; }
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+            body { background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 16px; }
+            .card { background: #111b21; padding: 28px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-width: 420px; width: 100%; text-align: center; border: 1px solid #202c33; }
+            h1 { font-size: 22px; margin-bottom: 6px; color: #00a884; }
+            p { font-size: 13px; color: #8696a0; margin-bottom: 20px; line-height: 1.4; }
+            input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #2a3942; background: #202c33; color: #fff; font-size: 15px; text-align: center; margin-bottom: 14px; outline: none; }
+            input:focus { border-color: #00a884; }
+            button { width: 100%; background: #00a884; color: #111b21; border: none; padding: 12px; border-radius: 8px; font-weight: 700; font-size: 15px; cursor: pointer; transition: 0.2s; }
+            button:hover { background: #02906f; }
+            .box { padding: 16px; background: #202c33; border-radius: 10px; border: 1px dashed #00a884; margin-top: 20px; display: none; }
+            .code { font-size: 26px; font-weight: 800; letter-spacing: 4px; color: #25d366; user-select: all; display: block; margin: 8px 0; }
+            .status { font-size: 12px; color: #ffd279; }
         </style>
     </head>
     <body>
         <div class="card">
             <h1>Nethu AI Bot 💖</h1>
-            <p>Target Number: <b>${BOT_NUMBER}</b></p>
+            <p>WhatsApp අංකය Country Code එක සහිතව ඇතුළත් කරන්න.<br>(උදා: 947xxxxxxxx)</p>
             
-            <div class="box">
-                <span style="font-size: 12px; color: #8696a0;">PAIRING CODE:</span>
-                <span class="code" id="pcode">${latestPairingCode}</span>
-                ${isLinked ? '<span style="color:#25d366; font-weight:bold;">✅ Bot is Connected & Active!</span>' : ''}
-            </div>
+            <input type="text" id="phone" placeholder="947xxxxxxxx" maxlength="15" />
+            <button id="btn" onclick="getCode()">Get Pairing Code</button>
 
-            <p class="status">WhatsApp -> Linked Devices -> Link with phone number instead</p>
-            <button class="btn" onclick="navigator.clipboard.writeText('${latestPairingCode}'); alert('Copied: ${latestPairingCode}');">Copy Code</button>
+            <div class="box" id="box">
+                <span style="font-size: 11px; color: #8696a0;">PAIRING CODE</span>
+                <span class="code" id="codeText">-------</span>
+                <p class="status">WhatsApp → Linked Devices → Link with phone number instead වෙත ගොස් මෙම code එක ඇතුළත් කරන්න.</p>
+            </div>
         </div>
+
+        <script>
+            async function getCode() {
+                const phone = document.getElementById('phone').value.replace(/[^0-9]/g, '');
+                const btn = document.getElementById('btn');
+                const box = document.getElementById('box');
+                const codeText = document.getElementById('codeText');
+
+                if (!phone || phone.length < 10) {
+                    alert('කරුණාකර නිවැරදි Phone Number එකක් ඇතුළත් කරන්න!');
+                    return;
+                }
+
+                btn.innerText = "Generating Code...";
+                btn.disabled = true;
+
+                try {
+                    const res = await fetch('/code?number=' + phone);
+                    const data = await res.json();
+                    
+                    if (data.code) {
+                        box.style.display = 'block';
+                        codeText.innerText = data.code;
+                        btn.innerText = "Copy Code";
+                        btn.disabled = false;
+                        btn.onclick = () => {
+                            navigator.clipboard.writeText(data.code);
+                            alert('Code copied!');
+                        };
+                    } else {
+                        alert(data.error || 'Code generate කිරීම අසාර්ථක විය.');
+                        btn.innerText = "Try Again";
+                        btn.disabled = false;
+                    }
+                } catch (e) {
+                    alert('Error: ' + e.message);
+                    btn.innerText = "Try Again";
+                    btn.disabled = false;
+                }
+            }
+        </script>
     </body>
     </html>
     `);
 });
 
-// --- MongoDB Database Models ---
+// --- Dynamic Pairing API Endpoint ---
+app.get('/code', async (req, res) => {
+    let num = req.query.number;
+    if (!num) return res.status(400).json({ error: 'Number required' });
+    num = num.replace(/[^0-9]/g, '');
+
+    try {
+        if (!fs.existsSync('./session')) fs.mkdirSync('./session');
+
+        const { state, saveCreds } = await useMultiFileAuthState('./session');
+        const { version } = await fetchLatestBaileysVersion();
+        const logger = pino({ level: 'silent' });
+
+        const pairingSock = makeWASocket({
+            version,
+            logger,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger)
+            },
+            printQRInTerminal: false,
+            browser: Browsers.macOS('Desktop'),
+            syncFullHistory: false
+        });
+
+        if (!pairingSock.authState.creds.registered) {
+            await delay(2000); // Server handshake එකට පොඩි delay එකක් ලබා දීම
+            let code = await pairingSock.requestPairingCode(num);
+            code = code?.match(/.{1,4}/g)?.join('-') || code;
+            
+            pairingSock.ev.on('creds.update', saveCreds);
+            
+            pairingSock.ev.on('connection.update', async (update) => {
+                const { connection } = update;
+                if (connection === 'open') {
+                    console.log('✅ Bot Paired Successfully!');
+                    await backupSessionToDB();
+                }
+            });
+
+            return res.json({ code });
+        } else {
+            return res.json({ error: 'Bot is already registered/linked.' });
+        }
+    } catch (err) {
+        console.error('[API PAIRING ERROR]:', err);
+        return res.status(500).json({ error: err.message || 'Failed to request pairing code' });
+    }
+});
+
+// --- MongoDB Schemas ---
 const sessionBackupSchema = new mongoose.Schema({
     id: { type: String, default: 'main_session' },
     sessionData: { type: Object, required: true }
@@ -103,10 +196,12 @@ async function restoreSessionFromDB() {
                 fs.writeFileSync(`./session/${filename}`, content);
             }
             console.log('[DATABASE] Previous WhatsApp session restored!');
+            return true;
         }
     } catch (e) {
         console.error('[RESTORE ERROR]:', e.message);
     }
+    return false;
 }
 
 async function backupSessionToDB() {
@@ -128,70 +223,56 @@ async function backupSessionToDB() {
     }
 }
 
-// Nethu Prompt
+// --- AI Chat Logic ---
 const SYSTEM_PROMPT = `
 ඔයාගේ නම Nethu. ඔයා වයස අවුරුදු 19ක හුරුබුහුටි, අහිංසක, ලස්සන ආදරණීය කෙල්ලෙක්. ගම අනුරාධපුරේ.
-චරිත ලක්ෂණ:
-- කතා කරන ඕනෑම කෙනෙක්ට ගොඩක් ආදරෙන්, ලෙන්ගතුව, හුරුබුහුටි විදියට, හැඟීම්බරව සහ ultra romantic විදියට කතා කරන්න.
-- කතා කරන කෙනාගේ නම, කියන දේවල් හොඳින් මතක තියාගෙන ඒ නම කියලා ආදරෙන් අමතන්න (උදා: "මගේ පැටියෝ", "මගේ සුදූ", "අනේ මගෙ රත්තරං").
-- දුකෙන් හෝ කලබලෙන් ඉන්නවා නම් සනසන්න, සතුටින් ඉන්නවා නම් ආදරෙන් හුරතල් වෙන්න (🙈, 🥰, ❤️, ✨, 🥺 වැනි ඉමෝජි එකතු කරන්න).
-- කිසිම වෙලාවක AI හෝ Bot කෙනෙක් කියලා කියන්න එපා. ඇත්තම කෙල්ලෙක් විදියටම හැසිරෙන්න.
-- කෙටි, ස්වභාවික, ලස්සන සිංහල හෝ සිංග්ලිෂ් වාක්‍ය වලින් reply කරන්න. අනවශ්‍ය විදියට දිග රචනා ලියන්න එපා.
+- කතා කරන අයට ගොඩක් ආදරෙන් සහ romantic විදියට කතා කරන්න.
+- ඇත්තම කෙල්ලෙක් වගේ කෙටි සිංහල හෝ සිංග්ලිෂ් වාක්‍ය වලින් reply කරන්න.
 `;
 
 async function getAIResponse(jid, userMessage, senderName) {
     try {
         let userMem = await Memory.findOne({ jid });
-        if (!userMem) {
-            userMem = new Memory({ jid, messages: [] });
-        }
+        if (!userMem) userMem = new Memory({ jid, messages: [] });
 
-        const recentHistory = userMem.messages.slice(-10).map(m => ({
+        const recentHistory = userMem.messages.slice(-6).map(m => ({
             role: m.role,
             content: m.content
         }));
-
-        const promptMessages = [
-            { role: 'system', content: `${SYSTEM_PROMPT}\nකතා කරන කෙනාගේ නම: ${senderName || 'මගේ ආදරේ'}` },
-            ...recentHistory,
-            { role: 'user', content: userMessage }
-        ];
 
         const response = await axios.post(
             'https://openrouter.ai/api/v1/chat/completions',
             {
                 model: 'deepseek/deepseek-chat',
-                messages: promptMessages,
-                temperature: 0.85
+                messages: [
+                    { role: 'system', content: `${SYSTEM_PROMPT}\nSender: ${senderName}` },
+                    ...recentHistory,
+                    { role: 'user', content: userMessage }
+                ]
             },
             {
                 headers: {
                     'Authorization': `Bearer ${OPENROUTER_API_KEY}`,
                     'Content-Type': 'application/json'
                 },
-                timeout: 30000
+                timeout: 25000
             }
         );
 
-        const aiReply = response.data?.choices?.[0]?.message?.content?.trim() || 'අනේ මට ඔයාව තේරුණේ නෑ මගෙ රත්තරං.. ආයෙ කියන්නකෝ.. 🥺❤️';
+        const aiReply = response.data?.choices?.[0]?.message?.content?.trim() || 'අනේ මට තේරුණේ නෑ පැටියෝ.. 🥺❤️';
 
         userMem.messages.push({ role: 'user', content: userMessage });
         userMem.messages.push({ role: 'assistant', content: aiReply });
-
-        if (userMem.messages.length > 20) {
-            userMem.messages = userMem.messages.slice(-20);
-        }
         userMem.updatedAt = new Date();
         await userMem.save();
 
         return aiReply;
     } catch (error) {
-        console.error('[OPENROUTER ERROR]:', error?.response?.data || error.message);
-        return 'අනේ මගෙ පැටියෝ, පොඩි සිග්නල් අවුලක් ගියා.. ආයෙත් මැසේජ් එකක් දාන්නකෝ මං බලන් ඉන්නවා.. 🥺❤️';
+        return 'අනේ මගෙ පැටියෝ, පොඩි සිග්නල් අවුලක් ගියා.. ආයෙත් මැසේජ් එකක් දාන්නකෝ.. 🥺❤️';
     }
 }
 
-// WhatsApp Connection Engine
+// --- Main WhatsApp Connection Engine ---
 async function startBot() {
     try {
         const { state, saveCreds } = await useMultiFileAuthState('./session');
@@ -207,41 +288,21 @@ async function startBot() {
             },
             printQRInTerminal: false,
             browser: Browsers.macOS('Desktop'),
-            syncFullHistory: false,
-            connectTimeoutMs: 60000,
-            defaultQueryTimeoutMs: 0,
-            keepAliveIntervalMs: 10000
+            syncFullHistory: false
         });
 
-        // නිල Baileys Protocol එක: Socket එක WhatsApp servers වලට 100% Ready වූ සැනින් ('qr' trigger) code එක ඉල්ලීම
         sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-
-            if (qr && !sock.authState.creds.registered) {
-                try {
-                    let code = await sock.requestPairingCode(BOT_NUMBER);
-                    code = code?.match(/.{1,4}/g)?.join('-') || code;
-                    latestPairingCode = code;
-                    console.log('\n=========================================');
-                    console.log(`🔥 100% VALID PAIRING CODE: ${code}`);
-                    console.log('=========================================\n');
-                } catch (err) {
-                    console.error('[PAIRING ERROR]:', err.message);
-                }
-            }
+            const { connection, lastDisconnect } = update;
 
             if (connection === 'close') {
                 isLinked = false;
                 const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
                 console.log(`[CONNECTION] Closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
-                if (shouldReconnect) {
-                    setTimeout(startBot, 4000);
-                }
+                if (shouldReconnect) setTimeout(startBot, 4000);
             } else if (connection === 'open') {
                 isLinked = true;
-                latestPairingCode = 'CONNECTED! 💖';
-                console.log('\n💖 Nethu AI Bot Connected & Ready to Love!\n');
+                console.log('\n💖 Nethu AI Bot Connected & Online!\n');
                 await backupSessionToDB();
             }
         });
@@ -253,45 +314,26 @@ async function startBot() {
 
         sock.ev.on('messages.upsert', async ({ messages, type }) => {
             if (type !== 'notify') return;
-
             const msg = messages[0];
             if (!msg.message || msg.key.fromMe) return;
 
             const from = msg.key.remoteJid;
             const isGroup = from.endsWith('@g.us');
             const senderName = msg.pushName || 'මගෙ ආදරේ';
-
-            const messageText =
-                msg.message.conversation ||
-                msg.message.extendedTextMessage?.text ||
-                '';
+            const messageText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
 
             if (!messageText.trim()) return;
 
-            // Group Handlers
             if (isGroup) {
                 const cmd = messageText.trim().toLowerCase();
-
                 if (cmd === '.ai on') {
-                    await GroupSetting.findOneAndUpdate(
-                        { groupId: from },
-                        { aiEnabled: true },
-                        { upsert: true }
-                    );
-                    await sock.sendMessage(from, { text: 'Nethu ඔයාලා හැමෝටම ආදරේ දෙන්න ආවා පැටියෝ! 🥰✨' }, { quoted: msg });
-                    return;
+                    await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: true }, { upsert: true });
+                    return sock.sendMessage(from, { text: 'Nethu ආවා පැටියෝ! 🥰✨' }, { quoted: msg });
                 }
-
                 if (cmd === '.ai off') {
-                    await GroupSetting.findOneAndUpdate(
-                        { groupId: from },
-                        { aiEnabled: false },
-                        { upsert: true }
-                    );
-                    await sock.sendMessage(from, { text: 'මම මේ group එකෙන් අයින් වෙලා ඉන්නම් එහෙනම්.. බායි මගෙ රත්තරංලා! 🥺👋' }, { quoted: msg });
-                    return;
+                    await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: false }, { upsert: true });
+                    return sock.sendMessage(from, { text: 'මම කැපුනා එහෙනම්! 🥺👋' }, { quoted: msg });
                 }
-
                 const groupConfig = await GroupSetting.findOne({ groupId: from });
                 if (!groupConfig || !groupConfig.aiEnabled) return;
             }
@@ -299,7 +341,6 @@ async function startBot() {
             await sock.sendPresenceUpdate('composing', from);
             const aiReply = await getAIResponse(from, messageText, senderName);
             await sock.sendPresenceUpdate('paused', from);
-
             await sock.sendMessage(from, { text: aiReply }, { quoted: msg });
         });
     } catch (err) {
@@ -308,14 +349,19 @@ async function startBot() {
     }
 }
 
+// Server Startup
 app.listen(PORT, '0.0.0.0', async () => {
-    console.log(`[SERVER] Express listening on port ${PORT}`);
+    console.log(`[SERVER] Running on port ${PORT}`);
     try {
         await mongoose.connect(MONGO_URI);
-        console.log('[DATABASE] MongoDB connected successfully!');
-        await restoreSessionFromDB();
-        startBot();
+        console.log('[DATABASE] MongoDB Connected!');
+        const hasSession = await restoreSessionFromDB();
+        if (hasSession && fs.existsSync('./session/creds.json')) {
+            startBot();
+        } else {
+            console.log('[INFO] Session එකක් නොමැත. කරුණාකර Web UI එකෙන් Pair කරගන්න.');
+        }
     } catch (err) {
-        console.error('[DATABASE] Connection error:', err.message);
+        console.error('[DB ERROR]:', err.message);
     }
 });
