@@ -4,14 +4,15 @@ import pino from 'pino';
 import axios from 'axios';
 import express from 'express';
 import mongoose from 'mongoose';
-import { useMongoDBAuthState } from './auth.js';
+import { useMongoDBAuthState, AuthModel } from './auth.js';
 
 const makeWASocket = pkg.default?.default || pkg.default || pkg;
 const {
     DisconnectReason,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
-    delay
+    delay,
+    Browsers
 } = pkg;
 
 const PORT = process.env.PORT || 10000;
@@ -23,8 +24,9 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 let sock = null;
+let isStarting = false;
 
-// --- Built-in Pairing Site UI ---
+// --- Pairing Web Site UI ---
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -32,31 +34,31 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Nethu AI - Chrome Pairing Web</title>
+        <title>Nethu AI - One-Shot Pairing</title>
         <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-            body { background: #0f172a; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
-            .card { background: #1e293b; padding: 30px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-width: 420px; width: 100%; text-align: center; border: 1px solid #334155; }
-            h1 { font-size: 26px; margin-bottom: 8px; color: #f43f5e; }
-            p { font-size: 14px; color: #94a3b8; margin-bottom: 24px; }
-            input { width: 100%; padding: 14px; border-radius: 12px; border: 1px solid #475569; background: #0f172a; color: #fff; font-size: 16px; margin-bottom: 16px; outline: none; }
-            input:focus { border-color: #f43f5e; }
-            button { width: 100%; padding: 14px; border-radius: 12px; border: none; background: #f43f5e; color: #fff; font-size: 16px; font-weight: bold; cursor: pointer; transition: 0.2s; }
-            button:hover { background: #e11d48; }
-            #codeDisplay { display: none; margin-top: 25px; padding: 16px; background: #0f172a; border-radius: 12px; border: 2px dashed #f43f5e; }
-            #codeDisplay span { font-size: 26px; font-weight: bold; letter-spacing: 5px; color: #38bdf8; display: block; margin-top: 8px; }
-            .copy-btn { margin-top: 12px; background: #334155; padding: 8px; font-size: 13px; }
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+            body { background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
+            .card { background: #111b21; padding: 32px; border-radius: 20px; box-shadow: 0 12px 30px rgba(0,0,0,0.6); max-width: 420px; width: 100%; text-align: center; border: 1px solid #202c33; }
+            h1 { font-size: 24px; margin-bottom: 6px; color: #00a884; }
+            p { font-size: 13px; color: #8696a0; margin-bottom: 22px; }
+            input { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #2a3942; background: #202c33; color: #fff; font-size: 16px; margin-bottom: 16px; outline: none; text-align: center; letter-spacing: 1px; }
+            input:focus { border-color: #00a884; }
+            button { width: 100%; padding: 14px; border-radius: 10px; border: none; background: #00a884; color: #111b21; font-size: 15px; font-weight: 700; cursor: pointer; transition: 0.2s; }
+            button:hover { background: #02906f; }
+            #codeDisplay { display: none; margin-top: 22px; padding: 18px; background: #202c33; border-radius: 12px; border: 2px dashed #00a884; }
+            #codeDisplay span { font-size: 28px; font-weight: 800; letter-spacing: 6px; color: #25d366; display: block; margin-top: 6px; }
+            .copy-btn { margin-top: 12px; background: #374248; color: #e9edef; padding: 8px 16px; font-size: 13px; font-weight: 600; border-radius: 6px; width: auto; }
         </style>
     </head>
     <body>
         <div class="card">
             <h1>Nethu AI Bot 💖</h1>
-            <p>WhatsApp අංකය ඇතුළත් කර Pairing Code එක ලබාගන්න (Chrome)</p>
-            <input type="text" id="phone" placeholder="947xxxxxxxx (0 නැතුව)" />
+            <p>WhatsApp අංකය ගහලා Code එක ගන්න</p>
+            <input type="text" id="phone" placeholder="947xxxxxxxx" />
             <button id="btn" onclick="getCode()">Pairing Code එක ගන්න</button>
             
             <div id="codeDisplay">
-                <p style="margin:0; font-size:12px;">ඔබගේ Pairing Code එක (වහාම Link කරන්න):</p>
+                <p style="margin:0; font-size:12px; color:#8696a0;">තත්පර 30ක් ඇතුළත WhatsApp එකට දාන්න:</p>
                 <span id="pairingCode">----</span>
                 <button class="copy-btn" onclick="copyCode()">Copy Code</button>
             </div>
@@ -74,7 +76,7 @@ app.get('/', (req, res) => {
                     return;
                 }
 
-                btn.innerText = 'Code එක හදනවා...';
+                btn.innerText = 'පරණ Data Clear කර Code එක හදනවා...';
                 btn.disabled = true;
 
                 try {
@@ -105,7 +107,7 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Pairing Code Endpoint
+// Pairing Code Generator Endpoint (Auto-cleans corrupted previous sessions)
 app.get('/code', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Number is required' });
@@ -116,27 +118,27 @@ app.get('/code', async (req, res) => {
     }
 
     try {
-        if (!sock) {
-            return res.status(500).json({ error: 'Bot initialization වෙමින් පවතී. තත්පර කීපයකින් උත්සාහ කරන්න.' });
-        }
-
-        if (sock.authState?.creds?.registered) {
+        if (sock?.authState?.creds?.registered) {
             return res.json({ error: 'WhatsApp bot එක දැනටමත් Link වී ඇත!' });
         }
 
-        await delay(2000);
+        console.log('[PAIRING] Flushing previous keys and initializing clean connection...');
+        await AuthModel.deleteMany({});
+        await startBot();
+        await delay(3000);
+
         let code = await sock.requestPairingCode(num);
         code = code?.match(/.{1,4}/g)?.join('-') || code;
 
-        console.log(`[PAIRING] Chrome Pair Code for ${num}: ${code}`);
+        console.log(`[PAIRING] Fresh pairing code for ${num}: ${code}`);
         return res.json({ code });
     } catch (err) {
-        console.error('[PAIR CODE API ERROR]:', err);
-        return res.status(500).json({ error: 'Pairing code ලබා ගැනීමට නොහැකි විය: ' + err.message });
+        console.error('[PAIR CODE ERROR]:', err);
+        return res.status(500).json({ error: 'කෝඩ් එක ලබාගැනීමට නොහැකි විය: ' + err.message });
     }
 });
 
-// --- MongoDB Schemas ---
+// MongoDB Schemas
 const memorySchema = new mongoose.Schema({
     jid: { type: String, required: true, unique: true },
     messages: [
@@ -221,9 +223,16 @@ async function getAIResponse(jid, userMessage, senderName) {
     }
 }
 
-// Bot Startup
+// Bot Initializer
 async function startBot() {
+    if (isStarting) return;
+    isStarting = true;
+
     try {
+        if (sock) {
+            try { sock.end(); } catch (e) {}
+        }
+
         const { state, saveCreds } = await useMongoDBAuthState();
         const { version } = await fetchLatestBaileysVersion();
         const logger = pino({ level: 'silent' });
@@ -236,8 +245,8 @@ async function startBot() {
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
             printQRInTerminal: false,
-            // Google Chrome Signature එක මෙතැනින් ලබාදී ඇත
-            browser: ['Chrome (Linux)', 'Chrome', '122.0.6261.94'],
+            // Official WhatsApp Desktop Signature (Link drops solve කරන එකම standard signature එක)
+            browser: Browsers.macOS('Desktop'),
             syncFullHistory: false,
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
@@ -278,7 +287,7 @@ async function startBot() {
 
             if (!messageText.trim()) return;
 
-            // Group Controls
+            // Group Controls (.ai on / .ai off)
             if (isGroup) {
                 const cmd = messageText.trim().toLowerCase();
 
@@ -315,10 +324,12 @@ async function startBot() {
     } catch (err) {
         console.error('[BOT INIT ERROR]:', err);
         setTimeout(startBot, 5000);
+    } finally {
+        isStarting = false;
     }
 }
 
-// Start Server & DB
+// Server Startup
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(`[SERVER] Express server bound to 0.0.0.0:${PORT}`);
     try {
