@@ -3,7 +3,7 @@ const { proto, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
 
 const AuthSchema = new mongoose.Schema({
     id: { type: String, required: true, unique: true },
-    data: { type: String, required: true }
+    data: { type: Object, required: true }
 });
 
 const AuthModel = mongoose.model('SessionData', AuthSchema);
@@ -12,7 +12,7 @@ async function useMongoDBAuthState() {
     let creds;
     try {
         const credsDoc = await AuthModel.findOne({ id: 'creds' });
-        creds = credsDoc ? JSON.parse(credsDoc.data, BufferJSON.reviver) : initAuthCreds();
+        creds = credsDoc ? JSON.parse(JSON.stringify(credsDoc.data), BufferJSON.reviver) : initAuthCreds();
     } catch (e) {
         creds = initAuthCreds();
     }
@@ -27,8 +27,8 @@ async function useMongoDBAuthState() {
                         ids.map(async (id) => {
                             try {
                                 const doc = await AuthModel.findOne({ id: `${type}-${id}` });
-                                if (doc) {
-                                    let value = JSON.parse(doc.data, BufferJSON.reviver);
+                                if (doc && doc.data) {
+                                    let value = JSON.parse(JSON.stringify(doc.data), BufferJSON.reviver);
                                     if (type === 'app-state-sync-key' && value) {
                                         value = proto.Message.AppStateSyncKeyData.fromObject(value);
                                     }
@@ -46,10 +46,11 @@ async function useMongoDBAuthState() {
                             const value = data[category][id];
                             const key = `${category}-${id}`;
                             if (value) {
+                                const cleanValue = JSON.parse(JSON.stringify(value, BufferJSON.replacer));
                                 tasks.push(
                                     AuthModel.updateOne(
                                         { id: key },
-                                        { $set: { data: JSON.stringify(value, BufferJSON.replacer) } },
+                                        { $set: { data: cleanValue } },
                                         { upsert: true }
                                     )
                                 );
@@ -64,9 +65,10 @@ async function useMongoDBAuthState() {
         },
         saveCreds: async () => {
             try {
+                const cleanCreds = JSON.parse(JSON.stringify(creds, BufferJSON.replacer));
                 await AuthModel.updateOne(
                     { id: 'creds' },
-                    { $set: { data: JSON.stringify(creds, BufferJSON.replacer) } },
+                    { $set: { data: cleanCreds } },
                     { upsert: true }
                 );
             } catch (e) {}
