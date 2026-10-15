@@ -23,7 +23,7 @@ const messageStore = new Map();
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 
-// 1. FRESH INSTANT PAIRING ENDPOINT
+// 1. INSTANT BULLETPROOF PAIR CODE ROUTE
 app.get('/pair', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Phone number is required' });
@@ -31,10 +31,14 @@ app.get('/pair', async (req, res) => {
     num = num.replace(/[^0-9]/g, '');
 
     try {
-        // පරණ හිරවුණු session data Database එකෙන් ඉවත් කිරීම
+        console.log(`\n⏳ Requesting fresh pairing code for: ${num}`);
+
+        // Clean previous session from DB
         try {
-            const AuthModel = mongoose.model('SessionData');
-            await AuthModel.deleteMany({});
+            if (mongoose.connection.readyState === 1) {
+                const AuthModel = mongoose.model('SessionData');
+                await AuthModel.deleteMany({});
+            }
         } catch (e) {}
 
         if (sock) {
@@ -45,12 +49,12 @@ app.get('/pair', async (req, res) => {
         const { state, saveCreds } = await useMongoDBAuthState();
         const { version } = await fetchLatestBaileysVersion();
 
-        // Dedicated Keep-Alive Socket
+        // Ubuntu Chrome browser setup is standard for Baileys pairing codes
         sock = makeWASocket({
             version,
             logger: pino({ level: 'fatal' }),
             auth: state,
-            browser: Browsers.macOS('Desktop'),
+            browser: Browsers.ubuntu('Chrome'),
             syncFullHistory: false,
             markOnlineOnConnect: true,
             connectTimeoutMs: 60000,
@@ -66,12 +70,11 @@ app.get('/pair', async (req, res) => {
 
         sock.ev.on('creds.update', saveCreds);
 
-        // Connection Handshake Listener
         sock.ev.on('connection.update', async (update) => {
             const { connection, lastDisconnect } = update;
 
             if (connection === 'open') {
-                console.log('✅ WhatsApp successfully paired & connected!');
+                console.log('✅ WhatsApp successfully connected & paired!');
                 try {
                     const myNumber = (sock.user?.id ? sock.user.id.split(':')[0] : '') + '@s.whatsapp.net';
                     if (myNumber.length > 15) {
@@ -88,14 +91,17 @@ app.get('/pair', async (req, res) => {
 
         setupMessageListener(sock);
 
-        // Socket එක WhatsApp server එකට Handshake වන තෙක් තත්පර 3ක් රැඳී සිටීම
-        await delay(3000);
+        // Wait just enough for the socket handshake to initialize
+        await delay(2500);
 
-        const code = await sock.requestPairingCode(num);
-        const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
-
-        console.log(`✅ Fresh Pair Code Issued: ${formattedCode}`);
-        return res.json({ code: formattedCode });
+        if (!sock.authState.creds.registered) {
+            const code = await sock.requestPairingCode(num);
+            const formattedCode = code?.match(/.{1,4}/g)?.join('-') || code;
+            console.log(`✅ Fresh Pair Code Issued: ${formattedCode}`);
+            return res.json({ code: formattedCode });
+        } else {
+            return res.json({ code: 'ALREADY_PAIRED' });
+        }
 
     } catch (err) {
         console.error('Pairing Error:', err);
@@ -115,7 +121,7 @@ const PORT = process.env.PORT || config.PORT || 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Web server listening on port ${PORT}`);
     
-    // Auto Keep-Alive every 5 mins to prevent Render Sleep
+    // Auto Keep-Alive ping
     setInterval(() => {
         try {
             https.get(`https://heshan-zh7a.onrender.com/ping-server`, () => {});
@@ -143,7 +149,6 @@ function setupMessageListener(activeSock) {
     });
 }
 
-// Existing valid session එකකින් run වීම
 async function startBot() {
     try {
         if (!isInitialized) {
@@ -153,7 +158,7 @@ async function startBot() {
 
         const { state, saveCreds } = await useMongoDBAuthState();
         if (!state.creds?.registered && !state.creds?.me) {
-            console.log('⚡ No session found. Waiting for pairing code from web...');
+            console.log('⚡ Ready for pairing via web.');
             return;
         }
 
@@ -163,7 +168,7 @@ async function startBot() {
             version,
             logger: pino({ level: 'fatal' }),
             auth: state,
-            browser: Browsers.macOS('Desktop'),
+            browser: Browsers.ubuntu('Chrome'),
             syncFullHistory: false,
             markOnlineOnConnect: true,
             generateHighQualityLinkPreview: true,
