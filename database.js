@@ -8,7 +8,6 @@ const SettingsSchema = new mongoose.Schema({
 
 const Settings = mongoose.model('Settings', SettingsSchema);
 
-// In-Memory Global Variable (Zero Latency)
 global.BOT_PREFIX = config.DEFAULT_PREFIX;
 
 async function connectDB() {
