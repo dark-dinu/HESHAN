@@ -3,7 +3,8 @@ const path = require('path');
 const {
     default: makeWASocket,
     DisconnectReason,
-    fetchLatestBaileysVersion
+    fetchLatestBaileysVersion,
+    proto
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const config = require('./config');
@@ -12,13 +13,11 @@ const { useMongoDBAuthState } = require('./auth');
 const { loadCommands, handleMessage } = require('./handler');
 
 let sock = null;
-let isStarted = false;
+let isInitialized = false;
 
-// 1. Web Server Setup
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Pair code request endpoint
 app.get('/pair', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Phone number is required' });
@@ -27,30 +26,27 @@ app.get('/pair', async (req, res) => {
 
     try {
         if (!sock || !sock.requestPairingCode) {
-            return res.status(503).json({ error: 'Socket is initializing, retry in a moment' });
+            return res.status(503).json({ error: 'Socket initializing, retry in a moment' });
         }
 
         if (sock.authState?.creds?.registered) {
-            return res.status(400).json({ error: 'Bot is already registered and authenticated' });
+            return res.status(400).json({ error: 'Already authenticated' });
         }
 
         const code = await sock.requestPairingCode(num);
         return res.json({ code: code?.match(/.{1,4}/g)?.join('-') || code });
     } catch (err) {
-        return res.status(500).json({ error: 'Failed to request pairing code' });
+        return res.status(500).json({ error: 'Pairing failed' });
     }
 });
 
-app.listen(config.PORT, () => {
-    // Port ready for web traffic and cloud health checks
-});
+app.listen(config.PORT, () => {});
 
-// 2. Core Bot Engine
 async function startBot() {
-    if (!isStarted) {
+    if (!isInitialized) {
         await connectDB();
         loadCommands();
-        isStarted = true;
+        isInitialized = true;
     }
 
     const { state, saveCreds } = await useMongoDBAuthState();
@@ -61,7 +57,10 @@ async function startBot() {
         logger: pino({ level: 'silent' }),
         auth: state,
         syncFullHistory: false,
-        markOnlineOnConnect: false
+        markOnlineOnConnect: false,
+        fireInitQueries: false,
+        shouldSyncHistoryMessage: () => false,
+        getMessage: async () => proto.Message.fromObject({})
     });
 
     sock.ev.on('creds.update', saveCreds);
@@ -71,18 +70,20 @@ async function startBot() {
 
         if (connection === 'close') {
             const statusCode = lastDisconnect?.error?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) {
-                setTimeout(startBot, 3000);
+            if (statusCode !== DisconnectReason.loggedOut) {
+                setTimeout(startBot, 2000);
             }
         } else if (connection === 'open') {
             try {
-                const userJid = sock.user.id.split(':')[0] + '@s.whatsapp.net';
-                await sock.sendMessage(userJid, { text: '*Connected... ✔️*' });
+                const myNumber = (sock.user?.id ? sock.user.id.split(':')[0] : '') + '@s.whatsapp.net';
+                if (myNumber.length > 15) {
+                    await sock.sendMessage(myNumber, { text: '*Connected... ✔️*' });
+                }
             } catch (e) {}
         }
     });
 
+    // Zero-lag event trigger
     sock.ev.on('messages.upsert', (msgUpdate) => {
         if (msgUpdate.type === 'notify') {
             handleMessage(sock, msgUpdate);
@@ -90,7 +91,6 @@ async function startBot() {
     });
 }
 
-// Global safe crash prevention
 process.on('uncaughtException', () => {});
 process.on('unhandledRejection', () => {});
 
