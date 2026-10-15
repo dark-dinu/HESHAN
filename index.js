@@ -4,7 +4,7 @@ const {
     default: makeWASocket,
     DisconnectReason,
     fetchLatestBaileysVersion,
-    makeInMemoryStore
+    proto
 } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const config = require('./config');
@@ -15,7 +15,8 @@ const { handleMessage } = require('./handler');
 let sock = null;
 let isInitialized = false;
 
-const store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
+// Simple, crash-proof in-memory message store
+const messageStore = new Map();
 
 const app = express();
 app.use(express.static(path.join(__dirname, 'public')));
@@ -66,15 +67,12 @@ async function startBot() {
             syncFullHistory: false,
             markOnlineOnConnect: false,
             getMessage: async (key) => {
-                if (store) {
-                    const msg = await store.loadMessage(key.remoteJid, key.id);
-                    return msg?.message || undefined;
+                if (key.id && messageStore.has(key.id)) {
+                    return messageStore.get(key.id);
                 }
-                return undefined;
+                return proto.Message.fromObject({});
             }
         });
-
-        store?.bind(sock.ev);
 
         sock.ev.on('creds.update', saveCreds);
 
@@ -100,6 +98,17 @@ async function startBot() {
         });
 
         sock.ev.on('messages.upsert', (msgUpdate) => {
+            // Cache recent messages to help decrypt replies
+            for (const m of msgUpdate.messages || []) {
+                if (m.key?.id && m.message) {
+                    messageStore.set(m.key.id, m.message);
+                    if (messageStore.size > 500) {
+                        const oldestKey = messageStore.keys().next().value;
+                        messageStore.delete(oldestKey);
+                    }
+                }
+            }
+
             if (msgUpdate.type === 'notify') {
                 handleMessage(sock, msgUpdate);
             }
@@ -111,7 +120,6 @@ async function startBot() {
     }
 }
 
-// Log unexpected errors without crashing immediately
 process.on('uncaughtException', (err) => {
     console.error('Uncaught Exception:', err);
 });
