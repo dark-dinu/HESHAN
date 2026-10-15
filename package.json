@@ -1,13 +1,14 @@
 {
-  "name": "speed-bot",
-  "version": "1.0.0",
-  "description": "Ultra fast zero-latency bot",
+  "name": "heshan-ai-bot",
+  "version": "3.0.0",
+  "description": "Smart WhatsApp AI Assistant named Heshan",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "@whiskeysockets/baileys": "^6.7.9",
+    "axios": "^1.7.9",
     "express": "^4.21.1",
     "mongoose": "^8.8.0",
     "pino": "^9.5.0"
