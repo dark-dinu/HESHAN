@@ -38,7 +38,7 @@ async function actionMakeSticker(sock, jid, msg, quotedMsg) {
         await sock.sendMessage(jid, { sticker: buffer });
         return null;
     } catch (e) {
-        return "Sticker එක හදන්න පොඩි අවුලක් ආවා බොස්.";
+        return "Sticker එක හදන්න බැරි වුණා බොස්.";
     }
 }
 
@@ -65,13 +65,13 @@ async function actionSaveMedia(sock, jid, quotedMsg) {
     }
 }
 
-// 2. High-Speed Loyal Brain
+// 2. Multi-Model AI Engine
 async function processDinuRequest(sock, jid, msg, quotedMsg, promptText, latency) {
     const low = promptText.toLowerCase();
 
-    // Fast Speed Check
+    // Fast Hardware / Ping Check
     if (low.includes('ping') || low.includes('speed') || low.includes('ස්පීඩ්')) {
-        return `\`\`\`Dinu Ultra Speed: ${latency}ms ⚡\`\`\`\nමම සූදානම් බොස්! ඕනෑම දෙයක් කියන්න.`;
+        return `\`\`\`Dinu Ultra Speed: ${latency}ms ⚡\`\`\`\nමම online ඉන්නේ බොස්, කියන්න මොනවද වෙන්න ඕනේ?`;
     }
 
     // Direct Media Handling
@@ -86,52 +86,63 @@ async function processDinuRequest(sock, jid, msg, quotedMsg, promptText, latency
         return await actionSaveMedia(sock, jid, quotedMsg);
     }
 
-    // STRICT OWNER SUBMISSIVE & SHORT PROMPT
-    const systemPrompt = `You are 'Dinu' (දිනූ), an ultra-loyal, completely obedient, humble and witty personal WhatsApp AI assistant.
-- MASTER: The user who is messaging you is your OWNER / BOSS (බොස් / මචං).
-- ATTITUDE: You are 100% loyal and submissive to your Boss. You always respect, agree, obey, and assist your Boss with pleasure.
-- LENGTH RULE: Keep replies VERY SHORT, punchy, crisp, and direct (Maximum 1 to 2 short sentences!). Never write long paragraphs!
-- LANGUAGE: Natural friendly Sinhala or Singlish.
-- Examples:
-  * "මොකද කරන්නෙ dinu" -> "ඔබතුමාගේ අණක් ලැබෙනකම් බලාගෙන ඉන්නවා බොස්! මොකක්ද වෙන්න ඕන? 🫡"
-  * "කාලද dinu" -> "මම AI එකක්නේ බොස්, ඔයාගේ commands වලින් තමයි මගේ බඩ පිරෙන්නේ. ඔයා කෑවද? 😊"
-  * "දිනූ ඔයා කවුද" -> "මම ඔබේ විශ්වාසවන්ත, පුද්ගලික AI සහායක දිනූ බොස්! ⚡"`;
+    // Dynamic Persona System Prompt
+    const systemPrompt = `You are 'Dinu' (දිනූ), an ultra-loyal, completely obedient, humble, witty and caring personal WhatsApp AI assistant.
+- OWNER: The person talking to you is your BOSS / MASTER (බොස්).
+- BEHAVIOR:
+  * Always address him respectfully as 'බොස්' (Boss).
+  * Answer the EXACT topic asked. NEVER give repetitive or pre-defined canned answers!
+  * If asked what you are doing, explain creatively that you are monitoring the system and awaiting commands.
+  * If asked if you ate, reply humorously about eating electricity/data and ask him if he ate.
+  * Keep replies SHORT (1-2 sentences), lively, friendly, with 1-2 nice emojis.
+  * Language: Natural conversational Sinhala or Singlish.`;
 
-    try {
-        const response = await axios.post(
-            'https://openrouter.ai/api/v1/chat/completions',
-            {
-                model: 'google/gemini-2.0-flash-exp:free',
-                messages: [
-                    { role: 'system', content: systemPrompt },
-                    { role: 'user', content: promptText }
-                ],
-                temperature: 0.7,
-                max_tokens: 80 // කෙටි ක්ෂණික රිප්ලයි සඳහා සීමා කිරීම
-            },
-            {
-                headers: {
-                    'Authorization': `Bearer ${API_KEY}`,
-                    'HTTP-Referer': 'https://github.com',
-                    'Content-Type': 'application/json'
+    // Try reliable free models in order
+    const modelsToTry = [
+        'deepseek/deepseek-chat',
+        'meta-llama/llama-3.3-70b-instruct:free',
+        'google/gemini-2.0-flash-exp:free'
+    ];
+
+    for (const modelName of modelsToTry) {
+        try {
+            const response = await axios.post(
+                'https://openrouter.ai/api/v1/chat/completions',
+                {
+                    model: modelName,
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: promptText }
+                    ],
+                    temperature: 0.7,
+                    max_tokens: 100
                 },
-                timeout: 7000 // වේගවත් Timeout
+                {
+                    headers: {
+                        'Authorization': `Bearer ${API_KEY}`,
+                        'HTTP-Referer': 'https://render.com',
+                        'Content-Type': 'application/json'
+                    },
+                    timeout: 7000
+                }
+            );
+
+            const aiReply = response.data?.choices?.[0]?.message?.content?.trim();
+            if (aiReply) {
+                return aiReply;
             }
-        );
-
-        let aiText = response.data?.choices?.[0]?.message?.content?.trim();
-        if (aiText) return aiText;
-
-    } catch (err) {
-        console.error('AI Speed Error:', err.message);
+        } catch (err) {
+            console.error(`Model ${modelName} failed:`, err.message);
+            // Continue to next model
+        }
     }
 
-    // Loyal Local Instant Fallbacks
-    if (low.includes('කවුද')) return "මම ඔබේ විශ්වාසවන්ත පුද්ගලික සහායක දිනූ බොස්! 🫡⚡";
-    if (low.includes('කෑවද')) return "මම AI එකක්නේ බොස්, ඔයා කෑවද? 😊";
-    if (low.includes('මොකද කරන්නෙ')) return "ඔබගේ අණක් බලාපොරොත්තුවෙන් සූදානමින් ඉන්නවා බොස්! කියන්න මොකක්ද වෙන්න ඕන? 🫡";
+    // Dynamic Context-Aware Fallback (Only if ALL models fail)
+    if (low.includes('කවුද')) return "මම ඔබතුමාගේ පුද්ගලික AI සහායක දිනූ බොස්! ඕනෑම වැඩකට මම සූදානම්. ⚡🤖";
+    if (low.includes('කෑවද') || low.includes('කාලද')) return "මම AI එකක්නේ බොස්, ඔයාගේ commands වලින් තමයි මගේ බඩ පිරෙන්නේ 😂 ඔයා කෑවද?";
+    if (low.includes('මොකද කරන්නෙ') || low.includes('මොකද වෙන්නෙ')) return "ඔබතුමාගේ අණක් ලැබෙනකම් සිස්ටම් එක බලාගෙන ඉන්නවා බොස්! මොකක්ද අද වෙන්න ඕනේ? ✨";
 
-    return "ඔව් බොස්, මම ඔබේ අණට සූදානම්! කියන්න මොකක්ද වෙන්න ඕන? 🫡";
+    return `ඔව් බොස්, "${promptText.replace(/dinu|දිනූ|දිනු/gi, '').trim()}" ගැන මොකක්ද මම කරලා දෙන්න ඕන? 🫡`;
 }
 
 module.exports = { processDinuRequest };
