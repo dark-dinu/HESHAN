@@ -1,29 +1,48 @@
-const mongoose = require('mongoose');
-const { proto, initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
+import mongoose from 'mongoose';
+import pkg from '@whiskeysockets/baileys';
 
-const AuthSchema = new mongoose.Schema({
+const { proto, initAuthCreds, BufferJSON } = pkg;
+
+// MongoDB Session Collection Schema
+const authSchema = new mongoose.Schema({
     id: { type: String, required: true, unique: true },
     data: { type: String, required: true }
 });
 
-const AuthModel = mongoose.model('SessionData', AuthSchema);
+const AuthModel = mongoose.models.AuthSession || mongoose.model('AuthSession', authSchema);
 
-async function useMongoDBAuthState() {
-    let creds;
-    try {
-        const credsDoc = await AuthModel.findOne({ id: 'creds' });
-        if (credsDoc && credsDoc.data) {
-            let parsed = typeof credsDoc.data === 'string' ? JSON.parse(credsDoc.data, BufferJSON.reviver) : credsDoc.data;
-            if (typeof parsed === 'string') {
-                parsed = JSON.parse(parsed, BufferJSON.reviver);
-            }
-            creds = parsed;
-        } else {
-            creds = initAuthCreds();
+export const useMongoDBAuthState = async () => {
+    const writeData = async (data, id) => {
+        try {
+            await AuthModel.updateOne(
+                { id },
+                { data: JSON.stringify(data, BufferJSON.replacer) },
+                { upsert: true }
+            );
+        } catch (error) {
+            console.error(`[AUTH DB] Error writing ${id}:`, error.message);
         }
-    } catch (e) {
-        creds = initAuthCreds();
-    }
+    };
+
+    const readData = async (id) => {
+        try {
+            const result = await AuthModel.findOne({ id });
+            if (!result || !result.data) return null;
+            return JSON.parse(result.data, BufferJSON.reviver);
+        } catch (error) {
+            return null;
+        }
+    };
+
+    const removeData = async (id) => {
+        try {
+            await AuthModel.deleteOne({ id });
+        } catch (error) {
+            console.error(`[AUTH DB] Error removing ${id}:`, error.message);
+        }
+    };
+
+    const creds = (await readData('creds')) || initAuthCreds();
 
     return {
         state: {
@@ -33,19 +52,11 @@ async function useMongoDBAuthState() {
                     const data = {};
                     await Promise.all(
                         ids.map(async (id) => {
-                            try {
-                                const doc = await AuthModel.findOne({ id: `${type}-${id}` });
-                                if (doc && doc.data) {
-                                    let value = typeof doc.data === 'string' ? JSON.parse(doc.data, BufferJSON.reviver) : doc.data;
-                                    if (typeof value === 'string') {
-                                        value = JSON.parse(value, BufferJSON.reviver);
-                                    }
-                                    if (type === 'app-state-sync-key' && value) {
-                                        value = proto.Message.AppStateSyncKeyData.fromObject(value);
-                                    }
-                                    data[id] = value;
-                                }
-                            } catch (e) {}
+                            let value = await readData(`${type}-${id}`);
+                            if (type === 'app-state-sync-key' && value) {
+                                value = proto.Message.AppStateSyncKeyData.fromObject(value);
+                            }
+                            data[id] = value;
                         })
                     );
                     return data;
@@ -56,35 +67,13 @@ async function useMongoDBAuthState() {
                         for (const id in data[category]) {
                             const value = data[category][id];
                             const key = `${category}-${id}`;
-                            if (value) {
-                                const serialized = JSON.stringify(value, BufferJSON.replacer);
-                                tasks.push(
-                                    AuthModel.updateOne(
-                                        { id: key },
-                                        { $set: { data: serialized } },
-                                        { upsert: true }
-                                    )
-                                );
-                            } else {
-                                tasks.push(AuthModel.deleteOne({ id: key }));
-                            }
+                            tasks.push(value ? writeData(value, key) : removeData(key));
                         }
                     }
                     await Promise.all(tasks);
                 }
             }
         },
-        saveCreds: async () => {
-            try {
-                const serialized = JSON.stringify(creds, BufferJSON.replacer);
-                await AuthModel.updateOne(
-                    { id: 'creds' },
-                    { $set: { data: serialized } },
-                    { upsert: true }
-                );
-            } catch (e) {}
-        }
+        saveCreds: () => writeData(creds, 'creds')
     };
-}
-
-module.exports = { useMongoDBAuthState };
+};
