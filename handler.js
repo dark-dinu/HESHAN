@@ -8,10 +8,13 @@ async function handleMessage(sock, msgUpdate) {
         const jid = msg.key.remoteJid;
         if (!jid || jid === 'status@broadcast') return;
 
+        // Unpack Ephemeral / ViewOnce wrappers
         let m = msg.message;
         if (m.ephemeralMessage) m = m.ephemeralMessage.message;
         if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
+        if (m.documentWithCaptionMessage) m = m.documentWithCaptionMessage.message;
 
+        // Extract raw text
         const body = m.conversation || 
                      m.extendedTextMessage?.text || 
                      m.imageMessage?.caption || 
@@ -20,41 +23,61 @@ async function handleMessage(sock, msgUpdate) {
         const text = body.trim();
         if (!text) return;
 
-        // "dinu", "දිනූ", "දිනු" trigger check
-        const regexDinu = /dinu|දිනූ|දිනු/i;
-        if (!regexDinu.test(text)) return;
+        // 1. TRIGGER DETECTION: "dinu", "දිනූ", "දිනු" (Case-insensitive anywhere in text)
+        const dinuRegex = /\b(dinu)\b|dinu|දිනූ|දිනු/i;
+        if (!dinuRegex.test(text)) return;
 
-        // Strict Owner Check:
-        const myJidNum = sock.user?.id ? sock.user.id.split(':')[0].replace(/[^0-9]/g, '') : '';
-        const senderNum = (msg.key.participant || jid).split(':')[0].replace(/[^0-9]/g, '');
-        const isFromMe = Boolean(msg.key.fromMe) || (myJidNum && senderNum === myJidNum);
+        // 2. ABSOLUTE OWNER DETECTION:
+        // Bot's own phone digits
+        const myRawId = sock.user?.id || '';
+        const botNumber = myRawId.split(':')[0].replace(/[^0-9]/g, '');
 
-        if (!isFromMe) return;
+        // Sender's phone digits
+        const senderRaw = msg.key.participant || jid;
+        const senderNumber = senderRaw.split(':')[0].replace(/[^0-9]/g, '');
 
-        console.log(`[DINU DETECTED]: "${text}" from ${senderNum}`);
+        // Check if message is from you (fromMe OR same number in private/self chat)
+        const isFromMe = Boolean(msg.key.fromMe);
+        const isOwnerNumber = Boolean(botNumber && senderNumber && botNumber === senderNumber);
+        const isSelfChat = jid.includes(botNumber);
 
+        if (!isFromMe && !isOwnerNumber && !isSelfChat) {
+            // Stranger messages are strictly ignored
+            return;
+        }
+
+        console.log(`⚡ [DINU TRIGGERED]: "${text}" from ${senderNumber}`);
+
+        // Typing indicator so you know Dinu is processing
+        await sock.sendPresenceUpdate('composing', jid).catch(() => {});
+
+        // Quoted message context extraction
         const quoted = m.extendedTextMessage?.contextInfo?.quotedMessage;
         let quotedMsg = null;
         if (quoted) {
             quotedMsg = quoted.ephemeralMessage?.message || quoted.viewOnceMessageV2?.message || quoted;
         }
 
+        // Latency calculation
         const now = Date.now();
         const msgTime = msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : now;
         let latency = now - msgTime;
-        if (isNaN(latency) || latency < 0) latency = 5;
-        if (latency === 0) latency = 1;
+        if (isNaN(latency) || latency < 0) latency = 12;
 
-        // Process with Dinu Brain
-        const responseText = await processDinuRequest(sock, jid, msg, quotedMsg, text, latency);
+        // Execute AI / Action Engine
+        const reply = await processDinuRequest(sock, jid, msg, quotedMsg, text, latency);
 
-        if (responseText) {
-            await sock.sendMessage(jid, { text: responseText });
-            console.log(`[DINU REPLIED]: "${responseText.slice(0, 30)}..."`);
+        // Turn off typing indicator
+        await sock.sendPresenceUpdate('paused', jid).catch(() => {});
+
+        // Send reply back to owner
+        if (reply) {
+            await sock.sendMessage(jid, { text: reply }, { quoted: msg });
+            console.log(`✔️ [DINU REPLIED]: ${reply.slice(0, 40)}...`);
         }
 
     } catch (err) {
-        console.error('Handler execution error:', err);
+        console.error('Fatal Handler Error:', err);
     }
 }
 
