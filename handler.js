@@ -8,7 +8,6 @@ async function handleMessage(sock, msgUpdate) {
         const jid = msg.key.remoteJid;
         if (!jid || jid === 'status@broadcast') return;
 
-        // Message text extract කර ගැනීම
         let m = msg.message;
         if (m.ephemeralMessage) m = m.ephemeralMessage.message;
         if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
@@ -21,25 +20,19 @@ async function handleMessage(sock, msgUpdate) {
         const text = body.trim();
         if (!text) return;
 
-        // 1. TRIGGER CHECK: "dinu", "Dinu", "දිනූ", "දිනු" වචනය තිබේදැයි බැලීම
+        // "dinu", "දිනූ", "දිනු" trigger check
         const regexDinu = /dinu|දිනූ|දිනු/i;
         if (!regexDinu.test(text)) return;
 
-        // 2. OWNER CHECK:
-        // Bot ගේම නම්බර් එකෙන් යැවූ මැසේජ් (fromMe) හෝ self chat පමණක් භාරගනී
-        const isFromMe = Boolean(msg.key.fromMe);
-        const myJid = sock.user?.id ? sock.user.id.split(':')[0] : '';
-        const sender = (msg.key.participant || jid).split(':')[0];
-        const isSelf = myJid && sender.includes(myJid);
+        // Strict Owner Check:
+        const myJidNum = sock.user?.id ? sock.user.id.split(':')[0].replace(/[^0-9]/g, '') : '';
+        const senderNum = (msg.key.participant || jid).split(':')[0].replace(/[^0-9]/g, '');
+        const isFromMe = Boolean(msg.key.fromMe) || (myJidNum && senderNum === myJidNum);
 
-        if (!isFromMe && !isSelf) {
-            // අනුන් දාන මැසේජ් සම්පූර්ණයෙන්ම ignore වේ
-            return;
-        }
+        if (!isFromMe) return;
 
-        console.log(`📩 Dinu Triggered by Owner: "${text}"`);
+        console.log(`[DINU DETECTED]: "${text}" from ${senderNum}`);
 
-        // Quoted message extract කිරීම
         const quoted = m.extendedTextMessage?.contextInfo?.quotedMessage;
         let quotedMsg = null;
         if (quoted) {
@@ -52,17 +45,16 @@ async function handleMessage(sock, msgUpdate) {
         if (isNaN(latency) || latency < 0) latency = 5;
         if (latency === 0) latency = 1;
 
-        // AI Request Processing
+        // Process with Dinu Brain
         const responseText = await processDinuRequest(sock, jid, msg, quotedMsg, text, latency);
 
-        // Direct Text Reply
         if (responseText) {
             await sock.sendMessage(jid, { text: responseText });
-            console.log(`📤 Dinu Replied: "${responseText.slice(0, 40)}..."`);
+            console.log(`[DINU REPLIED]: "${responseText.slice(0, 30)}..."`);
         }
 
     } catch (err) {
-        console.error('Handler Error:', err);
+        console.error('Handler execution error:', err);
     }
 }
 
