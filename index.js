@@ -7,10 +7,8 @@ import mongoose from 'mongoose';
 import fs from 'fs';
 import path from 'path';
 
-// Native JavaScript delay function (Baileys export මත රඳා නොපවතී)
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// ESM compatibility
 const baileysModule = baileys.default || baileys;
 const makeWASocket = baileysModule.default || baileysModule;
 const {
@@ -58,7 +56,6 @@ const groupSettingSchema = new mongoose.Schema({
 });
 const GroupSetting = mongoose.models.GroupSetting || mongoose.model('GroupSetting', groupSettingSchema);
 
-// Sync Local Session to MongoDB
 async function syncSessionToDB() {
     try {
         if (!fs.existsSync(SESSION_DIR)) return;
@@ -79,7 +76,6 @@ async function syncSessionToDB() {
     }
 }
 
-// Restore Session from MongoDB
 async function restoreSessionFromDB() {
     try {
         const records = await MultiSession.find({});
@@ -90,7 +86,7 @@ async function restoreSessionFromDB() {
             for (const item of records) {
                 fs.writeFileSync(path.join(SESSION_DIR, item.key), item.value);
             }
-            console.log('[SESSION] Previous session successfully restored from MongoDB.');
+            console.log('[SESSION] Previous session restored from MongoDB.');
             return true;
         }
     } catch (e) {
@@ -99,20 +95,7 @@ async function restoreSessionFromDB() {
     return false;
 }
 
-// Clear Session (Fresh Reset)
-async function resetAllSessions() {
-    try {
-        if (fs.existsSync(SESSION_DIR)) {
-            fs.rmSync(SESSION_DIR, { recursive: true, force: true });
-        }
-        await MultiSession.deleteMany({});
-        console.log('[SESSION] All previous session states wiped clean.');
-    } catch (e) {
-        console.error('[RESET ERROR]:', e.message);
-    }
-}
-
-// --- Built-in Web UI ---
+// Web UI
 app.get('/', (req, res) => {
     res.send(`
     <!DOCTYPE html>
@@ -120,9 +103,9 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Nethu AI - Multi-Device Pairing</title>
+        <title>Nethu AI - Pairing</title>
         <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: system-ui, -apple-system, sans-serif; }
             body { background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
             .card { background: #111b21; padding: 32px; border-radius: 20px; box-shadow: 0 12px 30px rgba(0,0,0,0.6); max-width: 420px; width: 100%; text-align: center; border: 1px solid #202c33; }
             h1 { font-size: 24px; margin-bottom: 6px; color: #00a884; }
@@ -132,15 +115,15 @@ app.get('/', (req, res) => {
             button { width: 100%; padding: 14px; border-radius: 10px; border: none; background: #00a884; color: #111b21; font-size: 15px; font-weight: 700; cursor: pointer; transition: 0.2s; }
             button:hover { background: #02906f; }
             #codeDisplay { display: none; margin-top: 22px; padding: 18px; background: #202c33; border-radius: 12px; border: 2px dashed #00a884; }
-            #codeDisplay span { font-size: 30px; font-weight: 800; letter-spacing: 6px; color: #25d366; display: block; margin-top: 6px; }
+            #codeDisplay span { font-size: 32px; font-weight: 800; letter-spacing: 6px; color: #25d366; display: block; margin-top: 6px; }
             .copy-btn { margin-top: 12px; background: #374248; color: #e9edef; padding: 8px 16px; font-size: 13px; font-weight: 600; border-radius: 6px; width: auto; }
         </style>
     </head>
     <body>
         <div class="card">
             <h1>Nethu AI Bot 💖</h1>
-            <p>WhatsApp අංකය ඇතුළත් කර Pairing Code එක ලබාගන්න</p>
-            <input type="text" id="phone" placeholder="947xxxxxxxx (0 නැතුව)" />
+            <p>WhatsApp අංකය ඇතුළත් කර Pairing Code එක ගන්න</p>
+            <input type="text" id="phone" placeholder="947xxxxxxxx" />
             <button id="btn" onclick="getCode()">Pairing Code එක ගන්න</button>
             
             <div id="codeDisplay">
@@ -162,7 +145,7 @@ app.get('/', (req, res) => {
                     return;
                 }
 
-                btn.innerText = 'Fresh Session එකක් සකස් කරමින්...';
+                btn.innerText = 'Code එක සකස් කරමින් පවතී (තත්පර 5ක් ඉන්න)...';
                 btn.disabled = true;
 
                 try {
@@ -193,7 +176,7 @@ app.get('/', (req, res) => {
     `);
 });
 
-// Pairing Code Endpoint
+// Pairing Code Generator Endpoint (Null Proof)
 app.get('/code', async (req, res) => {
     let num = req.query.number;
     if (!num) return res.status(400).json({ error: 'Number is required' });
@@ -204,16 +187,24 @@ app.get('/code', async (req, res) => {
     }
 
     try {
-        await resetAllSessions();
-        await startBot();
+        // පරණ session folder එක සහ DB records ක්ලියර් කර fresh start එකක් ගැනීම
+        if (fs.existsSync(SESSION_DIR)) {
+            fs.rmSync(SESSION_DIR, { recursive: true, force: true });
+        }
+        await MultiSession.deleteMany({});
 
-        // Native delay
-        await delay(3000);
+        // අලුත් socket instance එකක් හදලා ready වෙනකල් බලා සිටීම
+        sock = await createNewSocket();
+        await delay(3500);
+
+        if (!sock) {
+            return res.status(500).json({ error: 'Socket එක සෑදීමට නොහැකි විය. නැවත උත්සාහ කරන්න.' });
+        }
 
         let code = await sock.requestPairingCode(num);
         code = code?.match(/.{1,4}/g)?.join('-') || code;
 
-        console.log(`[PAIRING] New Pairing Code for ${num}: ${code}`);
+        console.log(`[PAIRING] New Pairing Code generated for ${num}: ${code}`);
         return res.json({ code });
     } catch (err) {
         console.error('[PAIR CODE ERROR]:', err);
@@ -221,7 +212,7 @@ app.get('/code', async (req, res) => {
     }
 });
 
-// Nethu System Prompt
+// Nethu Prompt
 const SYSTEM_PROMPT = `
 ඔයාගේ නම Nethu. ඔයා වයස අවුරුදු 19ක හුරුබුහුටි, අහිංසක, ලස්සන ආදරණීය කෙල්ලෙක්. ගම අනුරාධපුරේ.
 චරිත ලක්ෂණ:
@@ -284,107 +275,104 @@ async function getAIResponse(jid, userMessage, senderName) {
     }
 }
 
-// Bot Initializer
-async function startBot() {
-    try {
-        if (sock) {
-            try { sock.end(); } catch (e) {}
+// Socket Creator Function
+async function createNewSocket() {
+    if (sock) {
+        try { sock.end(); } catch (e) {}
+    }
+
+    const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+    const { version } = await fetchLatestBaileysVersion();
+    const logger = pino({ level: 'silent' });
+
+    const newSock = makeWASocket({
+        version,
+        logger,
+        auth: {
+            creds: state.creds,
+            keys: makeCacheableSignalKeyStore(state.keys, logger)
+        },
+        printQRInTerminal: false,
+        browser: Browsers.macOS('Desktop'),
+        syncFullHistory: false,
+        connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 0,
+        keepAliveIntervalMs: 10000
+    });
+
+    newSock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect } = update;
+
+        if (connection === 'close') {
+            const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            console.log(`[CONNECTION] Closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
+            if (shouldReconnect) {
+                setTimeout(createNewSocket, 4000);
+            }
+        } else if (connection === 'open') {
+            console.log('\n💖 Nethu AI Bot Connected & Ready to Love!\n');
+            await syncSessionToDB();
+        }
+    });
+
+    newSock.ev.on('creds.update', async () => {
+        await saveCreds();
+        await syncSessionToDB();
+    });
+
+    newSock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify') return;
+
+        const msg = messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+
+        const from = msg.key.remoteJid;
+        const isGroup = from.endsWith('@g.us');
+        const senderName = msg.pushName || 'මගෙ ආදරේ';
+
+        const messageText =
+            msg.message.conversation ||
+            msg.message.extendedTextMessage?.text ||
+            '';
+
+        if (!messageText.trim()) return;
+
+        if (isGroup) {
+            const cmd = messageText.trim().toLowerCase();
+
+            if (cmd === '.ai on') {
+                await GroupSetting.findOneAndUpdate(
+                    { groupId: from },
+                    { aiEnabled: true },
+                    { upsert: true }
+                );
+                await newSock.sendMessage(from, { text: 'Nethu ඔයාලා හැමෝටම ආදරේ දෙන්න ආවා පැටියෝ! 🥰✨' }, { quoted: msg });
+                return;
+            }
+
+            if (cmd === '.ai off') {
+                await GroupSetting.findOneAndUpdate(
+                    { groupId: from },
+                    { aiEnabled: false },
+                    { upsert: true }
+                );
+                await newSock.sendMessage(from, { text: 'මම මේ group එකෙන් අයින් වෙලා ඉන්නම් එහෙනම්.. බායි මගෙ රත්තරංලා! 🥺👋' }, { quoted: msg });
+                return;
+            }
+
+            const groupConfig = await GroupSetting.findOne({ groupId: from });
+            if (!groupConfig || !groupConfig.aiEnabled) return;
         }
 
-        const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-        const { version } = await fetchLatestBaileysVersion();
-        const logger = pino({ level: 'silent' });
+        await newSock.sendPresenceUpdate('composing', from);
+        const aiReply = await getAIResponse(from, messageText, senderName);
+        await newSock.sendPresenceUpdate('paused', from);
 
-        sock = makeWASocket({
-            version,
-            logger,
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, logger)
-            },
-            printQRInTerminal: false,
-            browser: Browsers.macOS('Desktop'),
-            syncFullHistory: false,
-            connectTimeoutMs: 60000,
-            defaultQueryTimeoutMs: 0,
-            keepAliveIntervalMs: 10000
-        });
+        await newSock.sendMessage(from, { text: aiReply }, { quoted: msg });
+    });
 
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
-
-            if (connection === 'close') {
-                const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                console.log(`[CONNECTION] Closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
-                if (shouldReconnect) {
-                    setTimeout(startBot, 4000);
-                }
-            } else if (connection === 'open') {
-                console.log('\n💖 Nethu AI Bot Connected & Ready to Love!\n');
-                await syncSessionToDB();
-            }
-        });
-
-        sock.ev.on('creds.update', async () => {
-            await saveCreds();
-            await syncSessionToDB();
-        });
-
-        sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type !== 'notify') return;
-
-            const msg = messages[0];
-            if (!msg.message || msg.key.fromMe) return;
-
-            const from = msg.key.remoteJid;
-            const isGroup = from.endsWith('@g.us');
-            const senderName = msg.pushName || 'මගෙ ආදරේ';
-
-            const messageText =
-                msg.message.conversation ||
-                msg.message.extendedTextMessage?.text ||
-                '';
-
-            if (!messageText.trim()) return;
-
-            if (isGroup) {
-                const cmd = messageText.trim().toLowerCase();
-
-                if (cmd === '.ai on') {
-                    await GroupSetting.findOneAndUpdate(
-                        { groupId: from },
-                        { aiEnabled: true },
-                        { upsert: true }
-                    );
-                    await sock.sendMessage(from, { text: 'Nethu ඔයාලා හැමෝටම ආදරේ දෙන්න ආවා පැටියෝ! 🥰✨' }, { quoted: msg });
-                    return;
-                }
-
-                if (cmd === '.ai off') {
-                    await GroupSetting.findOneAndUpdate(
-                        { groupId: from },
-                        { aiEnabled: false },
-                        { upsert: true }
-                    );
-                    await sock.sendMessage(from, { text: 'මම මේ group එකෙන් අයින් වෙලා ඉන්නම් එහෙනම්.. බායි මගෙ රත්තරංලා! 🥺👋' }, { quoted: msg });
-                    return;
-                }
-
-                const groupConfig = await GroupSetting.findOne({ groupId: from });
-                if (!groupConfig || !groupConfig.aiEnabled) return;
-            }
-
-            await sock.sendPresenceUpdate('composing', from);
-            const aiReply = await getAIResponse(from, messageText, senderName);
-            await sock.sendPresenceUpdate('paused', from);
-
-            await sock.sendMessage(from, { text: aiReply }, { quoted: msg });
-        });
-    } catch (err) {
-        console.error('[BOT INIT ERROR]:', err);
-        setTimeout(startBot, 5000);
-    }
+    return newSock;
 }
 
 // Start Server & Connect MongoDB
@@ -394,8 +382,10 @@ app.listen(PORT, '0.0.0.0', async () => {
         await mongoose.connect(MONGO_URI);
         console.log('[DATABASE] MongoDB connected successfully!');
         
-        await restoreSessionFromDB();
-        startBot();
+        const hasSession = await restoreSessionFromDB();
+        if (hasSession) {
+            sock = await createNewSocket();
+        }
     } catch (err) {
         console.error('[DATABASE] Connection error:', err.message);
     }
