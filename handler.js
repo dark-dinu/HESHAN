@@ -2,82 +2,60 @@ const { processDinuRequest } = require('./dinu_agent');
 
 async function handleMessage(sock, msgUpdate) {
     try {
-        const msg = msgUpdate.messages?.[0];
-        if (!msg || !msg.message) return;
+        if (!msgUpdate.messages || msgUpdate.messages.length === 0) return;
 
-        const jid = msg.key.remoteJid;
-        if (!jid || jid === 'status@broadcast') return;
+        for (const msg of msgUpdate.messages) {
+            if (!msg.message) continue;
 
-        // Unpack Ephemeral / ViewOnce wrappers
-        let m = msg.message;
-        if (m.ephemeralMessage) m = m.ephemeralMessage.message;
-        if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
-        if (m.documentWithCaptionMessage) m = m.documentWithCaptionMessage.message;
+            const jid = msg.key.remoteJid;
+            if (!jid || jid === 'status@broadcast') continue;
 
-        // Extract raw text
-        const body = m.conversation || 
-                     m.extendedTextMessage?.text || 
-                     m.imageMessage?.caption || 
-                     m.videoMessage?.caption || '';
+            // Raw message text extract කිරීම
+            let m = msg.message;
+            if (m.ephemeralMessage) m = m.ephemeralMessage.message;
+            if (m.viewOnceMessageV2) m = m.viewOnceMessageV2.message;
 
-        const text = body.trim();
-        if (!text) return;
+            const text = (m.conversation || 
+                          m.extendedTextMessage?.text || 
+                          m.imageMessage?.caption || 
+                          m.videoMessage?.caption || '').trim();
 
-        // 1. TRIGGER DETECTION: "dinu", "දිනූ", "දිනු" (Case-insensitive anywhere in text)
-        const dinuRegex = /\b(dinu)\b|dinu|දිනූ|දිනු/i;
-        if (!dinuRegex.test(text)) return;
+            if (!text) continue;
 
-        // 2. ABSOLUTE OWNER DETECTION:
-        // Bot's own phone digits
-        const myRawId = sock.user?.id || '';
-        const botNumber = myRawId.split(':')[0].replace(/[^0-9]/g, '');
+            // WhatsApp එකට එන හැම මැසේජ් එකක්ම Render Console එකේ Print කරමු!
+            console.log(`\n==============================`);
+            console.log(`📩 INCOMING MSG: "${text}"`);
+            console.log(`📍 From JID: ${jid}`);
+            console.log(`👤 fromMe: ${msg.key.fromMe}`);
+            console.log(`==============================\n`);
 
-        // Sender's phone digits
-        const senderRaw = msg.key.participant || jid;
-        const senderNumber = senderRaw.split(':')[0].replace(/[^0-9]/g, '');
+            // "dinu" හෝ "දිනූ" තිබේදැයි සරලව බැලීම
+            const hasDinu = /dinu|දිනූ|දිනු/i.test(text);
+            if (!hasDinu) continue;
 
-        // Check if message is from you (fromMe OR same number in private/self chat)
-        const isFromMe = Boolean(msg.key.fromMe);
-        const isOwnerNumber = Boolean(botNumber && senderNumber && botNumber === senderNumber);
-        const isSelfChat = jid.includes(botNumber);
+            // Typing status
+            await sock.sendPresenceUpdate('composing', jid).catch(() => {});
 
-        if (!isFromMe && !isOwnerNumber && !isSelfChat) {
-            // Stranger messages are strictly ignored
-            return;
+            const quoted = m.extendedTextMessage?.contextInfo?.quotedMessage;
+            let quotedMsg = null;
+            if (quoted) {
+                quotedMsg = quoted.ephemeralMessage?.message || quoted.viewOnceMessageV2?.message || quoted;
+            }
+
+            const latency = 10;
+
+            // AI / Fallback call
+            const reply = await processDinuRequest(sock, jid, msg, quotedMsg, text, latency);
+
+            await sock.sendPresenceUpdate('paused', jid).catch(() => {});
+
+            if (reply) {
+                await sock.sendMessage(jid, { text: reply });
+                console.log(`📤 SENT REPLY: "${reply}"\n`);
+            }
         }
-
-        console.log(`⚡ [DINU TRIGGERED]: "${text}" from ${senderNumber}`);
-
-        // Typing indicator so you know Dinu is processing
-        await sock.sendPresenceUpdate('composing', jid).catch(() => {});
-
-        // Quoted message context extraction
-        const quoted = m.extendedTextMessage?.contextInfo?.quotedMessage;
-        let quotedMsg = null;
-        if (quoted) {
-            quotedMsg = quoted.ephemeralMessage?.message || quoted.viewOnceMessageV2?.message || quoted;
-        }
-
-        // Latency calculation
-        const now = Date.now();
-        const msgTime = msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : now;
-        let latency = now - msgTime;
-        if (isNaN(latency) || latency < 0) latency = 12;
-
-        // Execute AI / Action Engine
-        const reply = await processDinuRequest(sock, jid, msg, quotedMsg, text, latency);
-
-        // Turn off typing indicator
-        await sock.sendPresenceUpdate('paused', jid).catch(() => {});
-
-        // Send reply back to owner
-        if (reply) {
-            await sock.sendMessage(jid, { text: reply }, { quoted: msg });
-            console.log(`✔️ [DINU REPLIED]: ${reply.slice(0, 40)}...`);
-        }
-
     } catch (err) {
-        console.error('Fatal Handler Error:', err);
+        console.error('Handler Diagnostic Error:', err);
     }
 }
 
