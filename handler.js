@@ -21,19 +21,20 @@ async function handleMessage(sock, msgUpdate) {
         const text = body.trim();
         if (!text) return;
 
-        // "Dinu" වචනය ඇතුළත්ද බැලීම (Case-insensitive)
-        if (!text.toLowerCase().includes('dinu')) return;
+        // 1. TRIGGER CHECK: "dinu", "Dinu", "දිනූ", "දිනු" වාක්‍යයේ ඕනෑම තැනක තිබේදැයි බැලීම
+        const regexDinu = /\b(dinu)\b|dinu|දිනූ|දිනු/i;
+        if (!regexDinu.test(text)) return;
 
-        // OWNER CHECK:
-        // ඔයා යවන මැසේජ් (fromMe) හෝ ඔයාගේම chat එක (Saved Messages / Message Yourself) පමණක් භාර ගැනීම
+        // 2. STRICT OWNER-ONLY CHECK:
+        // ඔයාගෙන්ම එන මැසේජ් (fromMe) හෝ ඔයාගේම account එකේ Self Chat පමණක් භාර ගැනීම
         const myJidNum = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : '';
         const senderNum = (msg.key.participant || jid).split(':')[0].split('@')[0];
         const isFromMe = msg.key.fromMe || (myJidNum && senderNum === myJidNum);
 
-        // අනුන් දාන මැසේජ් වලට Dinu උත්තර දෙන්නේ නැත
+        // වෙන කිසිම කෙනෙකුට Dinu කිසිම රිප්ලයි එකක් දෙන්නේ නැත
         if (!isFromMe) return;
 
-        // Mention / Quoted message extract කිරීම
+        // Quoted message extract කිරීම
         const quoted = m.extendedTextMessage?.contextInfo?.quotedMessage;
         let quotedMsg = null;
         if (quoted) {
@@ -47,12 +48,12 @@ async function handleMessage(sock, msgUpdate) {
         if (isNaN(latency) || latency < 0) latency = 5;
         if (latency === 0) latency = 1;
 
-        // Acknowledge reaction (Message එක අහු උනා කියලා පෙන්නන්න)
-        sock.sendMessage(jid, { react: { text: '⚡', key: msg.key } }).catch(() => {});
+        // React එක සම්පූර්ණයෙන්ම අයින් කර ඇත (Zero Reaction)
 
-        // AI Agent Request Processing
+        // Process AI / Action Request
         const responseText = await processDinuRequest(sock, jid, msg, quotedMsg, text, latency);
 
+        // Direct Text Reply
         if (responseText) {
             await sock.sendMessage(jid, { text: responseText });
         }
