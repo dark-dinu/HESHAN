@@ -1,6 +1,5 @@
 const fs = require('fs');
 const path = require('path');
-const { getSettings } = require('./database');
 
 const commands = new Map();
 
@@ -20,45 +19,39 @@ function loadCommands() {
     }
 }
 
-async function handleMessage(sock, msgUpdate) {
+function handleMessage(sock, msgUpdate) {
     try {
         const msg = msgUpdate.messages?.[0];
         if (!msg || !msg.message) return;
 
-        // WhatsApp message wrapper unpacking
-        let message = msg.message;
-        if (message.ephemeralMessage) {
-            message = message.ephemeralMessage.message;
-        }
-        if (message.viewOnceMessageV2) {
-            message = message.viewOnceMessageV2.message;
-        }
+        // Status updates සම්පූර්ණයෙන්ම skip කිරීම (Max Speed)
+        const jid = msg.key.remoteJid;
+        if (jid === 'status@broadcast') return;
 
-        // Text extraction across all message types
-        const body = message.conversation ||
-                     message.extendedTextMessage?.text ||
-                     message.imageMessage?.caption ||
-                     message.videoMessage?.caption ||
-                     '';
+        // Fastest direct text extraction without deep loops
+        const m = msg.message;
+        const text = m.conversation || 
+                     m.extendedTextMessage?.text || 
+                     m.imageMessage?.caption || 
+                     m.videoMessage?.caption || 
+                     (m.ephemeralMessage?.message?.conversation || m.ephemeralMessage?.message?.extendedTextMessage?.text) || '';
 
-        if (!body) return;
+        if (!text) return;
 
-        const settings = await getSettings();
-        const prefix = settings.prefix || '.';
+        const prefix = global.BOT_PREFIX || '.';
+        if (text[0] !== prefix) return;
 
-        if (!body.startsWith(prefix)) return;
-
-        const args = body.slice(prefix.length).trim().split(/\s+/);
-        const commandName = args.shift().toLowerCase();
+        const clean = text.slice(prefix.length).trim();
+        const spaceIdx = clean.indexOf(' ');
+        const commandName = (spaceIdx === -1 ? clean : clean.slice(0, spaceIdx)).toLowerCase();
+        const args = spaceIdx === -1 ? [] : clean.slice(spaceIdx + 1).split(/\s+/);
 
         const command = commands.get(commandName);
-        if (!command) return;
-
-        await command.execute(sock, msg, args);
-
-    } catch (err) {
-        // silent error handling
-    }
+        if (command) {
+            // Execution with internal timing
+            command.execute(sock, msg, args);
+        }
+    } catch (err) {}
 }
 
 module.exports = { loadCommands, handleMessage, commands };
