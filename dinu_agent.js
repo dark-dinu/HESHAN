@@ -14,7 +14,7 @@ async function streamToBuffer(stream) {
 async function actionChangeDP(sock, msg, quotedMsg) {
     try {
         const imgMessage = msg.message?.imageMessage || quotedMsg?.imageMessage;
-        if (!imgMessage) return "මට photo එකක් හම්බුනේ නෑ. Photo එකකට reply කරලා 'Dinu මේක dp දාන්න' කියලා කියන්න.";
+        if (!imgMessage) return "මට photo එකක් හම්බුනේ නෑ මචං. Photo එකකට reply කරලා 'Dinu මේක dp දාන්න' කියලා කියන්න.";
 
         const stream = await downloadContentFromMessage(imgMessage, 'image');
         const buffer = await streamToBuffer(stream);
@@ -22,7 +22,7 @@ async function actionChangeDP(sock, msg, quotedMsg) {
         await sock.updateProfilePicture(myJid, buffer);
         return "ඔයාගේ WhatsApp DP එක මම සාර්ථකව වෙනස් කළා මචං! ✔️";
     } catch (e) {
-        return "DP එක මාරු කරන්න බැරි වුණා.";
+        return "DP එක මාරු කරන්න ගිය වෙලාවේ error එකක් ආවා.";
     }
 }
 
@@ -30,7 +30,7 @@ async function actionChangeDP(sock, msg, quotedMsg) {
 async function actionMakeSticker(sock, jid, msg, quotedMsg) {
     try {
         const imgMessage = msg.message?.imageMessage || quotedMsg?.imageMessage;
-        if (!imgMessage) return "Sticker එකක් හදන්න image එකක් හම්බුනේ නෑ. Photo එකකට reply කරලා කියන්න.";
+        if (!imgMessage) return "Sticker එකක් හදන්න photo එකකට reply කරලා කියන්න මචං.";
 
         const stream = await downloadContentFromMessage(imgMessage, 'image');
         const buffer = await streamToBuffer(stream);
@@ -54,12 +54,12 @@ async function actionSaveMedia(sock, jid, quotedMsg) {
             const stream = await downloadContentFromMessage(img, 'image');
             const buffer = await streamToBuffer(stream);
             await sock.sendMessage(jid, { image: buffer, caption: "Saved Image 📥" });
-            return "Media එක සාර්ථකව save කරලා එව්වා!";
+            return "Media එක save කරලා එව්වා මචං!";
         } else if (vid) {
             const stream = await downloadContentFromMessage(vid, 'video');
             const buffer = await streamToBuffer(stream);
             await sock.sendMessage(jid, { video: buffer, caption: "Saved Video 📥" });
-            return "Video එක සාර්ථකව save කරලා එව්වා!";
+            return "Video එක save කරලා එව්වා මචං!";
         }
         return "මේක image එකක් හෝ video එකක් නෙවෙයි.";
     } catch (e) {
@@ -70,9 +70,9 @@ async function actionSaveMedia(sock, jid, quotedMsg) {
 // 4. Block / Unblock User
 async function actionBlockUser(sock, jid, block = true) {
     try {
-        if (jid.endsWith('@g.us')) return "ගෲප් block කරන්න බෑ මචං, පුද්ගලික chat එකකදී කියන්න.";
+        if (jid.endsWith('@g.us')) return "ගෲප් block කරන්න බෑ මචං.";
         await sock.updateBlockStatus(jid, block ? 'block' : 'unblock');
-        return block ? "User ව සාර්ථකව Block කළා! 🚫" : "User ව Unblock කළා! ✅";
+        return block ? "User ව Block කළා! 🚫" : "User ව Unblock කළා! ✅";
     } catch (e) {
         return "Block status වෙනස් කරන්න බැරි වුණා.";
     }
@@ -121,7 +121,7 @@ async function actionSendChannelPost(sock, msg, quotedMsg, promptText) {
                 contentToSend = { image: buffer, caption: quotedMsg.imageMessage.caption || '' };
             }
         } else {
-            const postText = promptText.replace(/dinu/gi, '').replace(linkMatch ? linkMatch[0] : '', '').trim();
+            const postText = promptText.replace(/dinu|දිනූ|දිනු/gi, '').replace(linkMatch ? linkMatch[0] : '', '').trim();
             contentToSend = { text: postText };
         }
 
@@ -132,38 +132,29 @@ async function actionSendChannelPost(sock, msg, quotedMsg, promptText) {
     }
 }
 
-// 7. Core AI Action Decider
+// 7. Core AI Processing & Smart Conversation
 async function processDinuRequest(sock, jid, msg, quotedMsg, promptText, latency) {
     const low = promptText.toLowerCase();
 
-    // Fast-path for quick keywords
-    if (low.includes('ping') || low.includes('speed')) {
-        return `\`\`\`Dinu Speed: ${latency}ms 🚀\`\`\`\nමම online ඉන්නේ මචං, කියන්න මොනවද වෙන්න ඕන?`;
+    // Fast-path keywords for ultra speed
+    if (low.includes('ping') || low.includes('speed') || low.includes('ස්පීඩ්')) {
+        return `\`\`\`Dinu Speed: ${latency}ms 🚀\`\`\`\nමම online ඉන්නේ මචං, කියන්න මොනවද වෙන්න ඕනේ?`;
     }
-    if ((low.includes('dp') || low.includes('photo')) && (msg.message?.imageMessage || quotedMsg?.imageMessage)) {
+    if ((low.includes('dp') || low.includes('photo') || low.includes('පොටෝ')) && (msg.message?.imageMessage || quotedMsg?.imageMessage)) {
         return await actionChangeDP(sock, msg, quotedMsg);
     }
-    if (low.includes('sticker') && (msg.message?.imageMessage || quotedMsg?.imageMessage)) {
+    if ((low.includes('sticker') || low.includes('ස්ටිකර්')) && (msg.message?.imageMessage || quotedMsg?.imageMessage)) {
         return await actionMakeSticker(sock, jid, msg, quotedMsg);
     }
 
-    const systemPrompt = `You are 'Dinu', the ultra-smart personal WhatsApp assistant of the bot owner.
-Understand the owner's natural language command and strictly choose an action.
-
-Available Actions:
-- "CHANGE_DP": Change, set or update DP/profile photo.
-- "MAKE_STICKER": Turn photo/media into a sticker.
-- "SAVE_MEDIA": Download, save status, or send back quoted view-once/media.
-- "BLOCK_USER": Block current user.
-- "UNBLOCK_USER": Unblock current user.
-- "MUTE_GROUP": Mute group/make only admin send messages.
-- "UNMUTE_GROUP": Unmute group/open chat for all.
-- "SEND_CHANNEL_POST": Send text/post to channel or group link.
-- "CHECK_PING": Inquire about ping, speed, or status.
-- "CHAT": General discussion or greeting.
-
-Output STRICT JSON only:
-{"action": "ACTION_NAME", "reply": "Natural friendly Sinhala text response"}`;
+    const systemPrompt = `You are 'Dinu' (දිනූ), the ultra-smart, loyal, friendly personal WhatsApp AI assistant of the bot owner.
+- Identity: Your name is Dinu (දිනූ).
+- Personality: Extremely sharp, witty, caring, friendly, and natural. Speak like a real close friend (මචං, ඔව් මම ඉන්නවා, etc.).
+- Tone: Natural conversational Sinhala / Singlish matching the owner's language.
+- Examples:
+  * "මොකද කරන්නෙ dinu" -> "නිකන් ඉන්නවා මචං, ඔයා මොකද කරන්නේ? මොකක්ද වෙන්න ඕන?"
+  * "කාලද දිනූ ඔයා" -> "මම AI එකක්නේ මචං, මට කෑම ඕන නෑ ඔයාගේ command වලින් තමයි මගේ බඩ පිරෙන්නේ 😂 ඔයා කෑවද?"
+- Actions: If the user explicitly asks to execute WhatsApp commands (CHANGE_DP, MAKE_STICKER, SAVE_MEDIA, BLOCK_USER, UNBLOCK_USER, MUTE_GROUP, UNMUTE_GROUP, SEND_CHANNEL_POST), respond in strict JSON. Otherwise, respond in natural Sinhala/Singlish plain text.`;
 
     try {
         const response = await axios.post(
@@ -174,36 +165,62 @@ Output STRICT JSON only:
                     { role: 'system', content: systemPrompt },
                     { role: 'user', content: promptText }
                 ],
-                temperature: 0.3
+                temperature: 0.6,
+                max_tokens: 350
             },
             {
                 headers: {
                     'Authorization': `Bearer ${config.OPENROUTER_API_KEY}`,
                     'Content-Type': 'application/json'
                 },
-                timeout: 12000
+                timeout: 10000
             }
         );
 
-        let content = response.data?.choices?.[0]?.message?.content?.trim() || '{}';
-        content = content.replace(/^```json/, '').replace(/```$/, '').trim();
-        const parsed = JSON.parse(content);
+        let content = response.data?.choices?.[0]?.message?.content?.trim() || '';
 
-        switch (parsed.action) {
-            case 'CHANGE_DP': return await actionChangeDP(sock, msg, quotedMsg);
-            case 'MAKE_STICKER': return await actionMakeSticker(sock, jid, msg, quotedMsg);
-            case 'SAVE_MEDIA': return await actionSaveMedia(sock, jid, quotedMsg);
-            case 'BLOCK_USER': return await actionBlockUser(sock, jid, true);
-            case 'UNBLOCK_USER': return await actionBlockUser(sock, jid, false);
-            case 'MUTE_GROUP': return await actionGroupMute(sock, jid, true);
-            case 'UNMUTE_GROUP': return await actionGroupMute(sock, jid, false);
-            case 'SEND_CHANNEL_POST': return await actionSendChannelPost(sock, msg, quotedMsg, promptText);
-            case 'CHECK_PING': return `\`\`\`Dinu Speed: ${latency}ms 🚀\`\`\``;
-            default: return parsed.reply || "ඔව් මචං, මම අහගෙන ඉන්නේ. කියන්න මොකක්ද මම කරලා දෙන්න ඕනේ?";
+        // If returned JSON for actions
+        if (content.startsWith('{') && content.endsWith('}')) {
+            try {
+                const parsed = JSON.parse(content);
+                if (parsed.action === 'CHANGE_DP') return await actionChangeDP(sock, msg, quotedMsg);
+                if (parsed.action === 'MAKE_STICKER') return await actionMakeSticker(sock, jid, msg, quotedMsg);
+                if (parsed.action === 'SAVE_MEDIA') return await actionSaveMedia(sock, jid, quotedMsg);
+                if (parsed.action === 'BLOCK_USER') return await actionBlockUser(sock, jid, true);
+                if (parsed.action === 'UNBLOCK_USER') return await actionBlockUser(sock, jid, false);
+                if (parsed.action === 'MUTE_GROUP') return await actionGroupMute(sock, jid, true);
+                if (parsed.action === 'UNMUTE_GROUP') return await actionGroupMute(sock, jid, false);
+                if (parsed.action === 'SEND_CHANNEL_POST') return await actionSendChannelPost(sock, msg, quotedMsg, promptText);
+                if (parsed.reply) return parsed.reply;
+            } catch (e) {}
         }
+
+        return content || "ඔව් මචං, මම අහගෙන ඉන්නේ. කියන්න මොකක්ද වෙන්න ඕනේ?";
+
     } catch (err) {
-        console.error('AI Request Error:', err.message);
-        return "ඔව් මචං, මම online ඉන්නේ! මොකක්ද මම කරලා දෙන්න ඕන?";
+        // Fallback model if Gemini is busy
+        try {
+            const fallbackRes = await axios.post(
+                'https://openrouter.ai/api/v1/chat/completions',
+                {
+                    model: 'deepseek/deepseek-chat',
+                    messages: [
+                        { role: 'system', content: systemPrompt },
+                        { role: 'user', content: promptText }
+                    ]
+                },
+                {
+                    headers: {
+                        'Authorization': `Bearer ${config.OPENROUTER_API_KEY}`,
+                        'Content-Type': 'application/json'
+                    },
+                    timeout: 10000
+                }
+            );
+            return fallbackRes.data?.choices?.[0]?.message?.content?.trim() || "මම මෙතන ඉන්නවා මචං, කියන්න!";
+        } catch (e) {
+            return "ඔව් මචං, මම online ඉන්නේ! මොකක්ද මම කරලා දෙන්න ඕන?";
+        }
     }
 }
 
