@@ -3,7 +3,6 @@ import pkg from '@whiskeysockets/baileys';
 
 const { proto, initAuthCreds, BufferJSON } = pkg;
 
-// MongoDB Session Collection Schema
 const authSchema = new mongoose.Schema({
     id: { type: String, required: true, unique: true },
     data: { type: String, required: true }
