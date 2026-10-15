@@ -11,8 +11,7 @@ const {
     DisconnectReason,
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
-    delay,
-    Browsers
+    delay
 } = pkg;
 
 const PORT = process.env.PORT || 10000;
@@ -33,7 +32,7 @@ app.get('/', (req, res) => {
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Nethu AI - Pairing Web</title>
+        <title>Nethu AI - Chrome Pairing Web</title>
         <style>
             * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
             body { background: #0f172a; color: #fff; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 20px; }
@@ -52,12 +51,12 @@ app.get('/', (req, res) => {
     <body>
         <div class="card">
             <h1>Nethu AI Bot 💖</h1>
-            <p>WhatsApp අංකය ඇතුළත් කර Pairing Code එක ලබාගන්න</p>
+            <p>WhatsApp අංකය ඇතුළත් කර Pairing Code එක ලබාගන්න (Chrome)</p>
             <input type="text" id="phone" placeholder="947xxxxxxxx (0 නැතුව)" />
             <button id="btn" onclick="getCode()">Pairing Code එක ගන්න</button>
             
             <div id="codeDisplay">
-                <p style="margin:0; font-size:12px;">ඔබගේ Pairing Code එක (තත්පර 20ක් ඇතුළත Link කරන්න):</p>
+                <p style="margin:0; font-size:12px;">ඔබගේ Pairing Code එක (වහාම Link කරන්න):</p>
                 <span id="pairingCode">----</span>
                 <button class="copy-btn" onclick="copyCode()">Copy Code</button>
             </div>
@@ -118,7 +117,7 @@ app.get('/code', async (req, res) => {
 
     try {
         if (!sock) {
-            return res.status(500).json({ error: 'Bot initialization වෙමින් පවතී. තත්පර 5කින් නැවත උත්සාහ කරන්න.' });
+            return res.status(500).json({ error: 'Bot initialization වෙමින් පවතී. තත්පර කීපයකින් උත්සාහ කරන්න.' });
         }
 
         if (sock.authState?.creds?.registered) {
@@ -129,7 +128,7 @@ app.get('/code', async (req, res) => {
         let code = await sock.requestPairingCode(num);
         code = code?.match(/.{1,4}/g)?.join('-') || code;
 
-        console.log(`[PAIRING] New code requested for ${num}: ${code}`);
+        console.log(`[PAIRING] Chrome Pair Code for ${num}: ${code}`);
         return res.json({ code });
     } catch (err) {
         console.error('[PAIR CODE API ERROR]:', err);
@@ -159,7 +158,7 @@ const groupSettingSchema = new mongoose.Schema({
 
 const GroupSetting = mongoose.models.GroupSetting || mongoose.model('GroupSetting', groupSettingSchema);
 
-// Nethu Character Prompt
+// Nethu Character Persona
 const SYSTEM_PROMPT = `
 ඔයාගේ නම Nethu. ඔයා වයස අවුරුදු 19ක හුරුබුහුටි, අහිංසක, ලස්සන ආදරණීය කෙල්ලෙක්. ගම අනුරාධපුරේ.
 චරිත ලක්ෂණ:
@@ -237,8 +236,8 @@ async function startBot() {
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
             printQRInTerminal: false,
-            // Official macOS Chrome Desktop signature එකෙන් Pairing error විසඳේ
-            browser: Browsers.macOS('Desktop'),
+            // Google Chrome Signature එක මෙතැනින් ලබාදී ඇත
+            browser: ['Chrome (Linux)', 'Chrome', '122.0.6261.94'],
             syncFullHistory: false,
             connectTimeoutMs: 60000,
             defaultQueryTimeoutMs: 0,
