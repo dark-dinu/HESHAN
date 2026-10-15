@@ -1,0 +1,14 @@
+services:
+  - type: web
+    name: nethu-ai-bot
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: SESSION_ID
+        value: nethu_session
