@@ -5,6 +5,7 @@ import axios from 'axios';
 import express from 'express';
 import mongoose from 'mongoose';
 import fs from 'fs';
+import path from 'path';
 
 const makeWASocket = pkg.default?.default || pkg.default || pkg;
 const {
@@ -12,7 +13,6 @@ const {
     fetchLatestBaileysVersion,
     makeCacheableSignalKeyStore,
     useMultiFileAuthState,
-    Browsers,
     delay
 } = pkg;
 
@@ -20,6 +20,7 @@ const PORT = process.env.PORT || 10000;
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY || "Sk-or-v1-49e4e4ecd1ad03c590399fa189e608e277356eb1d76686bdf986a40201c3596b";
 const MONGO_URI = process.env.MONGO_URI || "mongodb+srv://diniduheshan40_db_user:Heshan2007@cluster0.5gazebm.mongodb.net/?appName=Cluster0";
 
+const SESSION_DIR = './session';
 const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -27,139 +28,13 @@ app.use(express.urlencoded({ extended: true }));
 let sock = null;
 let isLinked = false;
 
-// --- Web UI ---
-app.get('/', (req, res) => {
-    res.send(`
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Nethu AI - WhatsApp Pairing</title>
-        <style>
-            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-            body { background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 16px; }
-            .card { background: #111b21; padding: 28px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-width: 420px; width: 100%; text-align: center; border: 1px solid #202c33; }
-            h1 { font-size: 22px; margin-bottom: 6px; color: #00a884; }
-            p { font-size: 13px; color: #8696a0; margin-bottom: 20px; line-height: 1.4; }
-            input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #2a3942; background: #202c33; color: #fff; font-size: 15px; text-align: center; margin-bottom: 14px; outline: none; }
-            input:focus { border-color: #00a884; }
-            button { width: 100%; background: #00a884; color: #111b21; border: none; padding: 12px; border-radius: 8px; font-weight: 700; font-size: 15px; cursor: pointer; transition: 0.2s; }
-            button:hover { background: #02906f; }
-            .box { padding: 16px; background: #202c33; border-radius: 10px; border: 1px dashed #00a884; margin-top: 20px; display: none; }
-            .code { font-size: 26px; font-weight: 800; letter-spacing: 4px; color: #25d366; user-select: all; display: block; margin: 8px 0; }
-            .status { font-size: 12px; color: #ffd279; }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>Nethu AI Bot 💖</h1>
-            <p>WhatsApp අංකය Country Code එක සහිතව ඇතුළත් කරන්න.<br>(උදා: 947xxxxxxxx)</p>
-            
-            <input type="text" id="phone" placeholder="947xxxxxxxx" maxlength="15" />
-            <button id="btn" onclick="getCode()">Get Pairing Code</button>
-
-            <div class="box" id="box">
-                <span style="font-size: 11px; color: #8696a0;">PAIRING CODE</span>
-                <span class="code" id="codeText">-------</span>
-                <p class="status">WhatsApp → Linked Devices → Link with phone number instead වෙත ගොස් මෙම code එක ඇතුළත් කරන්න.</p>
-            </div>
-        </div>
-
-        <script>
-            async function getCode() {
-                const phone = document.getElementById('phone').value.replace(/[^0-9]/g, '');
-                const btn = document.getElementById('btn');
-                const box = document.getElementById('box');
-                const codeText = document.getElementById('codeText');
-
-                if (!phone || phone.length < 10) {
-                    alert('කරුණාකර නිවැරදි Phone Number එකක් ඇතුළත් කරන්න!');
-                    return;
-                }
-
-                btn.innerText = "Generating Code...";
-                btn.disabled = true;
-
-                try {
-                    const res = await fetch('/code?number=' + phone);
-                    const data = await res.json();
-                    
-                    if (data.code) {
-                        box.style.display = 'block';
-                        codeText.innerText = data.code;
-                        btn.innerText = "Copy Code";
-                        btn.disabled = false;
-                        btn.onclick = () => {
-                            navigator.clipboard.writeText(data.code);
-                            alert('Code copied!');
-                        };
-                    } else {
-                        alert(data.error || 'Code generate කිරීම අසාර්ථක විය.');
-                        btn.innerText = "Try Again";
-                        btn.disabled = false;
-                    }
-                } catch (e) {
-                    alert('Error: ' + e.message);
-                    btn.innerText = "Try Again";
-                    btn.disabled = false;
-                }
-            }
-        </script>
-    </body>
-    </html>
-    `);
-});
-
-// --- Dynamic Pairing API Endpoint ---
-app.get('/code', async (req, res) => {
-    let num = req.query.number;
-    if (!num) return res.status(400).json({ error: 'Number required' });
-    num = num.replace(/[^0-9]/g, '');
-
-    try {
-        if (!fs.existsSync('./session')) fs.mkdirSync('./session');
-
-        const { state, saveCreds } = await useMultiFileAuthState('./session');
-        const { version } = await fetchLatestBaileysVersion();
-        const logger = pino({ level: 'silent' });
-
-        const pairingSock = makeWASocket({
-            version,
-            logger,
-            auth: {
-                creds: state.creds,
-                keys: makeCacheableSignalKeyStore(state.keys, logger)
-            },
-            printQRInTerminal: false,
-            browser: Browsers.macOS('Desktop'),
-            syncFullHistory: false
-        });
-
-        if (!pairingSock.authState.creds.registered) {
-            await delay(2000); // Server handshake එකට පොඩි delay එකක් ලබා දීම
-            let code = await pairingSock.requestPairingCode(num);
-            code = code?.match(/.{1,4}/g)?.join('-') || code;
-            
-            pairingSock.ev.on('creds.update', saveCreds);
-            
-            pairingSock.ev.on('connection.update', async (update) => {
-                const { connection } = update;
-                if (connection === 'open') {
-                    console.log('✅ Bot Paired Successfully!');
-                    await backupSessionToDB();
-                }
-            });
-
-            return res.json({ code });
-        } else {
-            return res.json({ error: 'Bot is already registered/linked.' });
-        }
-    } catch (err) {
-        console.error('[API PAIRING ERROR]:', err);
-        return res.status(500).json({ error: err.message || 'Failed to request pairing code' });
+// --- Session Reset Utility ---
+function clearLocalSession() {
+    if (fs.existsSync(SESSION_DIR)) {
+        fs.rmSync(SESSION_DIR, { recursive: true, force: true });
     }
-});
+    fs.mkdirSync(SESSION_DIR, { recursive: true });
+}
 
 // --- MongoDB Schemas ---
 const sessionBackupSchema = new mongoose.Schema({
@@ -190,12 +65,12 @@ const GroupSetting = mongoose.models.GroupSetting || mongoose.model('GroupSettin
 async function restoreSessionFromDB() {
     try {
         const backup = await SessionBackup.findOne({ id: 'main_session' });
-        if (backup && backup.sessionData) {
-            if (!fs.existsSync('./session')) fs.mkdirSync('./session');
+        if (backup && backup.sessionData && Object.keys(backup.sessionData).length > 0) {
+            clearLocalSession();
             for (const [filename, content] of Object.entries(backup.sessionData)) {
-                fs.writeFileSync(`./session/${filename}`, content);
+                fs.writeFileSync(path.join(SESSION_DIR, filename), content);
             }
-            console.log('[DATABASE] Previous WhatsApp session restored!');
+            console.log('[DATABASE] Previous session restored!');
             return true;
         }
     } catch (e) {
@@ -206,11 +81,13 @@ async function restoreSessionFromDB() {
 
 async function backupSessionToDB() {
     try {
-        if (!fs.existsSync('./session')) return;
-        const files = fs.readdirSync('./session');
+        if (!fs.existsSync(SESSION_DIR)) return;
+        const files = fs.readdirSync(SESSION_DIR);
+        if (files.length === 0) return;
+
         const sessionData = {};
         for (const file of files) {
-            sessionData[file] = fs.readFileSync(`./session/${file}`, 'utf-8');
+            sessionData[file] = fs.readFileSync(path.join(SESSION_DIR, file), 'utf-8');
         }
         await SessionBackup.updateOne(
             { id: 'main_session' },
@@ -223,10 +100,169 @@ async function backupSessionToDB() {
     }
 }
 
+// --- Modern Web UI ---
+app.get('/', (req, res) => {
+    res.send(`
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Nethu AI - WhatsApp Pairing</title>
+        <style>
+            * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+            body { background: #0b141a; color: #e9edef; display: flex; align-items: center; justify-content: center; min-height: 100vh; padding: 16px; }
+            .card { background: #111b21; padding: 28px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); max-width: 420px; width: 100%; text-align: center; border: 1px solid #202c33; }
+            h1 { font-size: 22px; margin-bottom: 6px; color: #00a884; }
+            p { font-size: 13px; color: #8696a0; margin-bottom: 20px; line-height: 1.4; }
+            input { width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #2a3942; background: #202c33; color: #fff; font-size: 16px; text-align: center; margin-bottom: 14px; outline: none; }
+            input:focus { border-color: #00a884; }
+            button { width: 100%; background: #00a884; color: #111b21; border: none; padding: 12px; border-radius: 8px; font-weight: 700; font-size: 15px; cursor: pointer; }
+            button:disabled { opacity: 0.6; cursor: not-allowed; }
+            .box { padding: 16px; background: #202c33; border-radius: 10px; border: 1px dashed #00a884; margin-top: 20px; display: none; }
+            .code { font-size: 28px; font-weight: 800; letter-spacing: 5px; color: #25d366; user-select: all; display: block; margin: 8px 0; }
+            .status { font-size: 12px; color: #ffd279; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Nethu AI Bot 💖</h1>
+            <p>WhatsApp අංකය Country Code එක සහිතව ඇතුළත් කරන්න.<br>(උදා: <b>947xxxxxxxx</b>)</p>
+            
+            <input type="text" id="phone" placeholder="947xxxxxxxx" maxlength="15" />
+            <button id="btn" onclick="getCode()">Get Pairing Code</button>
+
+            <div class="box" id="box">
+                <span style="font-size: 11px; color: #8696a0;">PAIRING CODE</span>
+                <span class="code" id="codeText">-------</span>
+                <p class="status">කෝඩ් එක කොපි කරගෙන WhatsApp → Linked Devices → Link with phone number එකට ලබා දෙන්න.</p>
+            </div>
+        </div>
+
+        <script>
+            async function getCode() {
+                const phone = document.getElementById('phone').value.replace(/[^0-9]/g, '');
+                const btn = document.getElementById('btn');
+                const box = document.getElementById('box');
+                const codeText = document.getElementById('codeText');
+
+                if (!phone || phone.length < 10) {
+                    alert('කරුණාකර නිවැරදි Phone Number එකක් ඇතුළත් කරන්න!');
+                    return;
+                }
+
+                btn.innerText = "Connecting Chrome & Generating...";
+                btn.disabled = true;
+
+                try {
+                    const res = await fetch('/code?number=' + phone);
+                    const data = await res.json();
+                    
+                    if (data.code) {
+                        box.style.display = 'block';
+                        codeText.innerText = data.code;
+                        btn.innerText = "Copy Code";
+                        btn.disabled = false;
+                        btn.onclick = () => {
+                            navigator.clipboard.writeText(data.code);
+                            alert('Code Copied: ' + data.code);
+                        };
+                    } else {
+                        alert(data.error || 'Code generate කිරීම අසාර්ථක විය.');
+                        btn.innerText = "Try Again";
+                        btn.disabled = false;
+                    }
+                } catch (e) {
+                    alert('Error: ' + e.message);
+                    btn.innerText = "Try Again";
+                    btn.disabled = false;
+                }
+            }
+        </script>
+    </body>
+    </html>
+    `);
+});
+
+// --- Dynamic Pairing API (Chrome Browser Client) ---
+app.get('/code', async (req, res) => {
+    let num = req.query.number;
+    if (!num) return res.status(400).json({ error: 'Number required' });
+    num = num.replace(/[^0-9]/g, '');
+
+    if (sock) {
+        try { sock.end(undefined); } catch (_) {}
+        sock = null;
+    }
+    clearLocalSession();
+    await SessionBackup.deleteOne({ id: 'main_session' }).catch(() => {});
+
+    try {
+        const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+        const { version } = await fetchLatestBaileysVersion();
+        const logger = pino({ level: 'silent' });
+
+        sock = makeWASocket({
+            version,
+            logger,
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger)
+            },
+            printQRInTerminal: false,
+            browser: ["Chrome (Linux)", "Chrome", "122.0.6261.112"],
+            syncFullHistory: false,
+            connectTimeoutMs: 60000,
+            defaultQueryTimeoutMs: 0,
+            keepAliveIntervalMs: 10000
+        });
+
+        sock.ev.on('creds.update', async () => {
+            await saveCreds();
+            await backupSessionToDB();
+        });
+
+        setupConnectionListeners(sock);
+
+        let codeSent = false;
+
+        const getPairCode = async () => {
+            await delay(4500);
+            try {
+                if (!sock.authState.creds.registered && !codeSent) {
+                    let code = await sock.requestPairingCode(num);
+                    code = code?.match(/.{1,4}/g)?.join('-') || code;
+                    codeSent = true;
+                    return res.json({ code });
+                }
+            } catch (err) {
+                if (!codeSent) {
+                    codeSent = true;
+                    console.error('[PAIR RETRY ERROR]:', err);
+                    return res.status(500).json({ error: 'WhatsApp pairing failed: ' + (err.message || 'Connection closed') });
+                }
+            }
+        };
+
+        const timeout = setTimeout(() => {
+            if (!codeSent) {
+                codeSent = true;
+                return res.status(504).json({ error: 'Request timeout. කරුණාකර නැවත උත්සාහ කරන්න.' });
+            }
+        }, 30000);
+
+        getPairCode().finally(() => clearTimeout(timeout));
+
+    } catch (err) {
+        console.error('[API PAIRING ERROR]:', err);
+        return res.status(500).json({ error: err.message || 'Server error' });
+    }
+});
+
 // --- AI Chat Logic ---
 const SYSTEM_PROMPT = `
 ඔයාගේ නම Nethu. ඔයා වයස අවුරුදු 19ක හුරුබුහුටි, අහිංසක, ලස්සන ආදරණීය කෙල්ලෙක්. ගම අනුරාධපුරේ.
-- කතා කරන අයට ගොඩක් ආදරෙන් සහ romantic විදියට කතා කරන්න.
+- කතා කරන අයට ගොඩක් ආදරෙන්, ලෙන්ගතුව සහ romantic විදියට කතා කරන්න.
 - ඇත්තම කෙල්ලෙක් වගේ කෙටි සිංහල හෝ සිංග්ලිෂ් වාක්‍ය වලින් reply කරන්න.
 `;
 
@@ -272,10 +308,63 @@ async function getAIResponse(jid, userMessage, senderName) {
     }
 }
 
-// --- Main WhatsApp Connection Engine ---
-async function startBot() {
+// --- Event Handlers Setup ---
+function setupConnectionListeners(targetSock) {
+    targetSock.ev.on('connection.update', async (update) => {
+        const { connection, lastDisconnect } = update;
+
+        if (connection === 'close') {
+            isLinked = false;
+            const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
+            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+            console.log(`[CONNECTION] Closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
+            if (shouldReconnect) {
+                setTimeout(startExistingBot, 4000);
+            }
+        } else if (connection === 'open') {
+            isLinked = true;
+            console.log('\n💖 Nethu AI Bot Connected & Online Successfully!\n');
+            await backupSessionToDB();
+        }
+    });
+
+    targetSock.ev.on('messages.upsert', async ({ messages, type }) => {
+        if (type !== 'notify') return;
+        const msg = messages[0];
+        if (!msg.message || msg.key.fromMe) return;
+
+        const from = msg.key.remoteJid;
+        const isGroup = from.endsWith('@g.us');
+        const senderName = msg.pushName || 'මගෙ ආදරේ';
+        const messageText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
+
+        if (!messageText.trim()) return;
+
+        if (isGroup) {
+            const cmd = messageText.trim().toLowerCase();
+            if (cmd === '.ai on') {
+                await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: true }, { upsert: true });
+                return targetSock.sendMessage(from, { text: 'Nethu ආවා පැටියෝ! 🥰✨' }, { quoted: msg });
+            }
+            if (cmd === '.ai off') {
+                await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: false }, { upsert: true });
+                return targetSock.sendMessage(from, { text: 'මම කැපුනා එහෙනම්! 🥺👋' }, { quoted: msg });
+            }
+            const groupConfig = await GroupSetting.findOne({ groupId: from });
+            if (!groupConfig || !groupConfig.aiEnabled) return;
+        }
+
+        await targetSock.sendPresenceUpdate('composing', from);
+        const aiReply = await getAIResponse(from, messageText, senderName);
+        await targetSock.sendPresenceUpdate('paused', from);
+        await targetSock.sendMessage(from, { text: aiReply }, { quoted: msg });
+    });
+}
+
+// --- Start Bot with Saved Session ---
+async function startExistingBot() {
     try {
-        const { state, saveCreds } = await useMultiFileAuthState('./session');
+        const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
         const { version } = await fetchLatestBaileysVersion();
         const logger = pino({ level: 'silent' });
 
@@ -287,24 +376,8 @@ async function startBot() {
                 keys: makeCacheableSignalKeyStore(state.keys, logger)
             },
             printQRInTerminal: false,
-            browser: Browsers.macOS('Desktop'),
+            browser: ["Chrome (Linux)", "Chrome", "122.0.6261.112"],
             syncFullHistory: false
-        });
-
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect } = update;
-
-            if (connection === 'close') {
-                isLinked = false;
-                const statusCode = (lastDisconnect?.error instanceof Boom)?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                console.log(`[CONNECTION] Closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
-                if (shouldReconnect) setTimeout(startBot, 4000);
-            } else if (connection === 'open') {
-                isLinked = true;
-                console.log('\n💖 Nethu AI Bot Connected & Online!\n');
-                await backupSessionToDB();
-            }
         });
 
         sock.ev.on('creds.update', async () => {
@@ -312,54 +385,23 @@ async function startBot() {
             await backupSessionToDB();
         });
 
-        sock.ev.on('messages.upsert', async ({ messages, type }) => {
-            if (type !== 'notify') return;
-            const msg = messages[0];
-            if (!msg.message || msg.key.fromMe) return;
-
-            const from = msg.key.remoteJid;
-            const isGroup = from.endsWith('@g.us');
-            const senderName = msg.pushName || 'මගෙ ආදරේ';
-            const messageText = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
-
-            if (!messageText.trim()) return;
-
-            if (isGroup) {
-                const cmd = messageText.trim().toLowerCase();
-                if (cmd === '.ai on') {
-                    await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: true }, { upsert: true });
-                    return sock.sendMessage(from, { text: 'Nethu ආවා පැටියෝ! 🥰✨' }, { quoted: msg });
-                }
-                if (cmd === '.ai off') {
-                    await GroupSetting.findOneAndUpdate({ groupId: from }, { aiEnabled: false }, { upsert: true });
-                    return sock.sendMessage(from, { text: 'මම කැපුනා එහෙනම්! 🥺👋' }, { quoted: msg });
-                }
-                const groupConfig = await GroupSetting.findOne({ groupId: from });
-                if (!groupConfig || !groupConfig.aiEnabled) return;
-            }
-
-            await sock.sendPresenceUpdate('composing', from);
-            const aiReply = await getAIResponse(from, messageText, senderName);
-            await sock.sendPresenceUpdate('paused', from);
-            await sock.sendMessage(from, { text: aiReply }, { quoted: msg });
-        });
+        setupConnectionListeners(sock);
     } catch (err) {
-        console.error('[BOT ERROR]:', err);
-        setTimeout(startBot, 5000);
+        console.error('[START BOT ERROR]:', err);
     }
 }
 
-// Server Startup
+// --- Server Startup ---
 app.listen(PORT, '0.0.0.0', async () => {
     console.log(`[SERVER] Running on port ${PORT}`);
     try {
         await mongoose.connect(MONGO_URI);
         console.log('[DATABASE] MongoDB Connected!');
         const hasSession = await restoreSessionFromDB();
-        if (hasSession && fs.existsSync('./session/creds.json')) {
-            startBot();
+        if (hasSession && fs.existsSync(path.join(SESSION_DIR, 'creds.json'))) {
+            startExistingBot();
         } else {
-            console.log('[INFO] Session එකක් නොමැත. කරුණාකර Web UI එකෙන් Pair කරගන්න.');
+            console.log('[INFO] Active session එකක් නොමැත. Web UI එකෙන් අංකය දී pair කරගන්න.');
         }
     } catch (err) {
         console.error('[DB ERROR]:', err.message);
