@@ -10,12 +10,11 @@ const pino = require('pino');
 const config = require('./config');
 const { connectDB } = require('./database');
 const { useMongoDBAuthState } = require('./auth');
-const { loadCommands, handleMessage } = require('./handler');
+const { handleMessage } = require('./handler');
 
 let sock = null;
 let isInitialized = false;
 
-// In-memory message store to fix "Waiting for this message"
 const store = makeInMemoryStore({ logger: pino({ level: 'silent' }) });
 
 const app = express();
@@ -48,7 +47,6 @@ app.listen(config.PORT, () => {});
 async function startBot() {
     if (!isInitialized) {
         await connectDB();
-        loadCommands();
         isInitialized = true;
     }
 
@@ -61,7 +59,6 @@ async function startBot() {
         auth: state,
         syncFullHistory: false,
         markOnlineOnConnect: false,
-        // Crucial: Correct message loader for decryption
         getMessage: async (key) => {
             if (store) {
                 const msg = await store.loadMessage(key.remoteJid, key.id);
