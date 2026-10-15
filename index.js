@@ -84,7 +84,7 @@ async function startBot() {
             try {
                 const myNumber = (sock.user?.id ? sock.user.id.split(':')[0] : '') + '@s.whatsapp.net';
                 if (myNumber.length > 15) {
-                    await sock.sendMessage(myNumber, { text: '*Connected... ✔️*' });
+                    await sock.sendMessage(myNumber, { text: '*Dinu AI Assistant Ready... ⚡*' });
                 }
             } catch (e) {}
         }
