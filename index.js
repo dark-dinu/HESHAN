@@ -42,12 +42,12 @@ async function askNethuAI(userMessage) {
     );
     return res.data.choices[0]?.message?.content?.trim();
   } catch (error) {
-    console.error("OpenRouter API Error:", error?.response?.data || error.message);
+    console.error("OpenRouter Error:", error?.response?.data || error.message);
     return "අනේ මට පොඩ්ඩක් මහන්සියි වගේ පැටියෝ.. පස්සෙ කතා කරමුද? 🥺❤️";
   }
 }
 
-// Attach bot event listeners
+// Bot Message & Command Listeners
 function setupBotEvents(socket) {
   socket.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
@@ -90,12 +90,13 @@ function setupBotEvents(socket) {
       return;
     }
 
+    // Checking inbox/group permissions
     if (isGroup) {
       const setting = await GroupSetting.findOne({ groupId: jid });
       if (!setting || !setting.aiEnabled) return;
     }
 
-    // Reaction & Reply
+    // Reaction & AI Reply
     try {
       await socket.sendMessage(jid, { react: { text: "❤️", key: msg.key } });
       await socket.sendPresenceUpdate("composing", jid);
@@ -110,7 +111,7 @@ function setupBotEvents(socket) {
   });
 }
 
-// Start Main Bot Engine
+// Start Main Bot Engine with MongoDB Auth
 async function startNethuBot() {
   const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
   const { version } = await fetchLatestBaileysVersion();
@@ -132,9 +133,9 @@ async function startNethuBot() {
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log(`Connection closed (code: ${statusCode}). Reconnecting: ${shouldReconnect}`);
+      console.log(`Connection closed (${statusCode}). Reconnecting: ${shouldReconnect}`);
       if (shouldReconnect) {
-        setTimeout(startNethuBot, 4000);
+        setTimeout(startNethuBot, 3000);
       }
     } else if (connection === "open") {
       console.log("🌸 Nethu AI Bot Connected & Online!");
@@ -145,23 +146,20 @@ async function startNethuBot() {
   return sock;
 }
 
-// Express Pairing Route
+// Pairing Endpoint
 app.get("/pair", async (req, res) => {
   let num = req.query.number;
-  if (!num) return res.status(400).json({ error: "දුරකථන අංකය අවශ්‍යයි." });
+  if (!num) return res.status(400).json({ error: "දුරකථන අංකය ඇතුළත් කරන්න." });
 
   num = num.replace(/[^0-9]/g, "");
 
-  const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
-
-  if (state.creds && state.creds.registered) {
-    return res.status(400).json({ error: "බොට් දැනටමත් WhatsApp එකට Link වී ඇත!" });
-  }
+  // Fast temp auth folder for instant pairing
+  const tempDir = path.join(__dirname, "temp_" + Date.now());
+  const { state, saveCreds } = await useMultiFileAuthState(tempDir);
+  const { version } = await fetchLatestBaileysVersion();
 
   try {
-    const { version } = await fetchLatestBaileysVersion();
-
-    const tempSock = makeWASocket({
+    const pairSock = makeWASocket({
       version,
       logger: pino({ level: "silent" }),
       printQRInTerminal: false,
@@ -169,36 +167,55 @@ app.get("/pair", async (req, res) => {
       browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
 
-    tempSock.ev.on("creds.update", saveCreds);
+    pairSock.ev.on("creds.update", saveCreds);
 
-    tempSock.ev.on("connection.update", async (update) => {
+    pairSock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect } = update;
+
       if (connection === "open") {
-        console.log("🌸 Linked successfully!");
-        sock = tempSock;
-        setupBotEvents(sock);
+        console.log("🌸 WhatsApp linked successfully! Migrating to MongoDB...");
+        // Temp folder එකෙන් creds අරන් MongoDB වලට save කිරීම
+        const mongoAuth = await useMongoAuthState(config.SESSION_ID);
+        const credsData = JSON.parse(fs.readFileSync(path.join(tempDir, "creds.json"), "utf-8"));
+        
+        // MongoDB එකේ save කරන්න
+        const mongoose = require("mongoose");
+        const AuthModel = mongoose.model("Auth");
+        await AuthModel.findOneAndUpdate(
+          { sessionId: config.SESSION_ID, id: "creds" },
+          { sessionId: config.SESSION_ID, id: "creds", value: JSON.stringify(credsData) },
+          { upsert: true }
+        );
+
+        // Temp folder cleanup
+        fs.rmSync(tempDir, { recursive: true, force: true });
+
+        // Start permanent bot session
+        await pairSock.end();
+        setTimeout(startNethuBot, 2000);
       } else if (connection === "close") {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
-        if (statusCode !== DisconnectReason.loggedOut) {
-          startNethuBot();
+        if (statusCode === DisconnectReason.loggedOut) {
+          fs.rmSync(tempDir, { recursive: true, force: true });
         }
       }
     });
 
-    // WhatsApp server handshake delay
-    await delay(6000);
+    // Wait 2.5 seconds for socket connection before requesting pairing code
+    await delay(2500);
 
-    const rawCode = await tempSock.requestPairingCode(num);
+    const rawCode = await pairSock.requestPairingCode(num);
     const code = rawCode?.match(/.{1,4}/g)?.join("-") || rawCode;
-    console.log(`Pairing code generated for ${num}: ${code}`);
+    console.log(`Pairing Code created: ${code}`);
     return res.json({ code });
   } catch (err) {
     console.error("Pairing failure:", err);
-    return res.status(500).json({ error: "කේතය ගැනීමට නොහැකි විය. කරුණාකර තත්පර 10කින් නැවත උත්සාහ කරන්න." });
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    return res.status(500).json({ error: "කේතය ලබාගැනීමට නොහැකි විය. කරුණාකර නැවත උත්සාහ කරන්න." });
   }
 });
 
-// Server Initialization
+// App Startup
 async function startServer() {
   await connectDB(config.MONGODB_URI);
 
