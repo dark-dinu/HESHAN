@@ -17,8 +17,6 @@ app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json());
 
 let sock = null;
-let mongoState = null;
-let saveCredsFunc = null;
 
 // OpenRouter AI Call
 async function askNethuAI(userMessage) {
@@ -48,26 +46,21 @@ async function askNethuAI(userMessage) {
   }
 }
 
-// Bot Connection Handler
-async function initWhatsApp(isPairing = false) {
-  if (!mongoState) {
-    const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
-    mongoState = state;
-    saveCredsFunc = saveCreds;
-  }
-
+// WhatsApp Engine Startup
+async function startNethuBot() {
+  const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
   const { version } = await fetchLatestBaileysVersion();
 
   sock = makeWASocket({
     version,
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
-    auth: mongoState,
-    browser: Browsers.macOS("Chrome"),
+    auth: state,
+    browser: Browsers.ubuntu("Chrome"),
     syncFullHistory: false
   });
 
-  sock.ev.on("creds.update", saveCredsFunc);
+  sock.ev.on("creds.update", saveCreds);
 
   sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update;
@@ -75,9 +68,9 @@ async function initWhatsApp(isPairing = false) {
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log("Connection closed. Reason code:", statusCode, "Reconnecting:", shouldReconnect);
+      console.log("Connection closed. Status:", statusCode, "Reconnecting:", shouldReconnect);
       if (shouldReconnect) {
-        initWhatsApp();
+        setTimeout(startNethuBot, 3000);
       }
     } else if (connection === "open") {
       console.log("🌸 Nethu AI Bot Connected & Online!");
@@ -148,7 +141,7 @@ async function initWhatsApp(isPairing = false) {
   return sock;
 }
 
-// Pairing Endpoint
+// Pairing Endpoint with safe retry and delay
 app.get("/pair", async (req, res) => {
   let num = req.query.number;
   if (!num) return res.status(400).json({ error: "දුරකථන අංකය අවශ්‍යයි." });
@@ -156,18 +149,24 @@ app.get("/pair", async (req, res) => {
   num = num.replace(/[^0-9]/g, "");
 
   try {
-    // Registered නැත්නම් පමණක් pairing code එක ඉල්ලන්න
-    if (!sock || !sock.authState.creds.registered) {
-      await initWhatsApp(true);
-      await delay(2000); // Socket එක සූදානම් වීමට තත්පර 2ක්
-      const code = await sock.requestPairingCode(num);
-      return res.json({ code: code?.match(/.{1,4}/g)?.join("-") || code });
-    } else {
-      return res.status(400).json({ error: "බොට් දැනටමත් වෙනත් අංකයකට Link වී ඇත!" });
+    if (sock?.authState?.creds?.registered) {
+      return res.status(400).json({ error: "බොට් දැනටමත් Link වී ඇත!" });
     }
+
+    // Socket එක ready නැත්නම් නැවත හදන්න
+    if (!sock) {
+      await startNethuBot();
+    }
+
+    // Baileys WebSocket Handshake එක සම්පූර්ණ වෙන්න තත්පර 3ක් දෙන්න
+    await delay(3000);
+
+    const code = await sock.requestPairingCode(num);
+    const formattedCode = code?.match(/.{1,4}/g)?.join("-") || code;
+    return res.json({ code: formattedCode });
   } catch (err) {
-    console.error("Pairing Error:", err);
-    return res.status(500).json({ error: "Pairing code එක ලබාගැනීමට නොහැකි විය. නැවත උත්සාහ කරන්න." });
+    console.error("Pairing Error details:", err);
+    return res.status(500).json({ error: "Pairing code එක ලබාගැනීමට නොහැකි විය. කරුණාකර තත්පර 5කට පසු නැවත උත්සාහ කරන්න." });
   }
 });
 
@@ -177,8 +176,7 @@ async function startServer() {
   app.listen(config.PORT, () => {
     console.log(`🌸 Nethu AI Pairing Web Site is live on port ${config.PORT}`);
   });
-  // ආරම්භයේදීම පවතින session එක load කර සම්බන්ධ වීම
-  await initWhatsApp();
+  await startNethuBot();
 }
 
 startServer().catch(console.error);
