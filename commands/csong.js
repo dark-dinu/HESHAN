@@ -87,6 +87,8 @@ module.exports = {
 
       let targetYoutubeUrl = songQuery;
       let searchedTitle = songQuery;
+      let searchedDuration = '03:45';
+
       const isYoutubeUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(songQuery);
       
       if (!isYoutubeUrl) {
@@ -96,6 +98,7 @@ module.exports = {
         }
         targetYoutubeUrl = searchResult.videos[0].url;
         searchedTitle = searchResult.videos[0].title;
+        searchedDuration = searchResult.videos[0].timestamp || '03:45';
       }
 
       // API Call
@@ -106,15 +109,28 @@ module.exports = {
       const downloadUrl = apiResponse?.download_url || apiResponse?.data?.download_url;
       const title = apiResponse?.title || apiResponse?.data?.title || searchedTitle;
       const thumbnail = apiResponse?.thumbnail || apiResponse?.data?.thumbnail;
+      const duration = searchedDuration;
 
       if (!downloadUrl) {
         return await sock.sendMessage(jid, { text: '❌ Download Link එක ලබා ගැනීමට නොහැකි විය.' }, { quoted: msg });
       }
 
-      // 1. Song Card Image එක මුලින් යැවීම
+      // 1. Song Card Image එක යැවීම (නව Design එක)
+      const songCardCaption = 
+`> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
+
+*❖ ᴛɪᴛʟᴇ :* ${title}
+
+01:23 ───🔘──────── ${duration}
+⇄     ◁   ❚❚   ▷     ↻
+
+\`\`\`➥ Don't forget to enjoy the song and leave a reaction! 🥰🎶\`\`\`
+
+> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ꜱᴏɴɢ ʜᴜʙ*`;
+
       await sock.sendMessage(targetChannelJid, {
         image: { url: thumbnail },
-        caption: `🎵 *H E S H A N   O F C   M U S I C* 🎵\n━━━━━━━━━━━━━━━━━━━━━━\n🎧 *Title:* ${title}\n📡 *Sent By:* HESHAN-OFC BOT\n━━━━━━━━━━━━━━━━━━━━━━\n> 🎧 Play the voice note below!`
+        caption: songCardCaption
       });
 
       // 2. Audio/Video එක local file එකකට download කරගැනීම
@@ -142,7 +158,7 @@ module.exports = {
 
       const audioBuffer = fs.readFileSync(tempOutputFile);
 
-      // 6. WhatsApp Channel එකට Voice Note එක යැවීම (Waveform + Duration සහිතව)
+      // 6. WhatsApp Channel එකට Voice Note එක යැවීම
       await sock.sendMessage(targetChannelJid, {
         audio: audioBuffer,
         mimetype: 'audio/ogg; codecs=opus',
