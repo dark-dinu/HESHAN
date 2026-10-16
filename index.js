@@ -2,21 +2,25 @@ const {
   default: makeWASocket,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  Browsers
+  Browsers,
+  delay
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const express = require("express");
+const path = require("path");
 const axios = require("axios");
-const qrcode = require("qrcode-terminal");
 const config = require("./config");
 const { connectDB, useMongoAuthState, GroupSetting } = require("./database");
 
-// Render Web Service එක sleep නොවී තියාගන්න Express server එක
 const app = express();
-app.get("/", (req, res) => res.send("Nethu AI is Active and Running! 🌸"));
-app.listen(config.PORT, () => console.log(`Server listening on port ${config.PORT}`));
+app.use(express.static(path.join(__dirname, "public")));
+app.use(express.json());
 
-// OpenRouter AI call function
+let sock = null;
+let mongoState = null;
+let saveCredsFunc = null;
+
+// OpenRouter AI Call
 async function askNethuAI(userMessage) {
   try {
     const res = await axios.post(
@@ -44,39 +48,39 @@ async function askNethuAI(userMessage) {
   }
 }
 
-async function startNethuBot() {
-  await connectDB(config.MONGODB_URI);
-  const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
+// Bot Connection Handler
+async function initWhatsApp(isPairing = false) {
+  if (!mongoState) {
+    const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
+    mongoState = state;
+    saveCredsFunc = saveCreds;
+  }
+
   const { version } = await fetchLatestBaileysVersion();
 
-  const sock = makeWASocket({
+  sock = makeWASocket({
     version,
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
-    auth: state,
-    browser: Browsers.macOS("Chrome"), // Chrome Browser Signature
+    auth: mongoState,
+    browser: Browsers.macOS("Chrome"),
     syncFullHistory: false
   });
 
-  sock.ev.on("creds.update", saveCreds);
+  sock.ev.on("creds.update", saveCredsFunc);
 
-  sock.ev.on("connection.update", (update) => {
-    const { connection, lastDisconnect, qr } = update;
-
-    if (qr) {
-      console.log("\nScan this QR code with WhatsApp:\n");
-      qrcode.generate(qr, { small: true });
-    }
+  sock.ev.on("connection.update", async (update) => {
+    const { connection, lastDisconnect } = update;
 
     if (connection === "close") {
-      const shouldReconnect =
-        lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
-      console.log("Connection closed. Reconnecting...", shouldReconnect);
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
+      const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+      console.log("Connection closed. Reason code:", statusCode, "Reconnecting:", shouldReconnect);
       if (shouldReconnect) {
-        startNethuBot();
+        initWhatsApp();
       }
     } else if (connection === "open") {
-      console.log("🌸 Nethu AI Bot Connected Successfully!");
+      console.log("🌸 Nethu AI Bot Connected & Online!");
     }
   });
 
@@ -87,8 +91,7 @@ async function startNethuBot() {
 
     const jid = msg.key.remoteJid;
     const isGroup = jid.endsWith("@g.us");
-    
-    // Extract text from regular messages or extended text
+
     const text =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
@@ -97,7 +100,7 @@ async function startNethuBot() {
     const cleanText = text.trim();
     if (!cleanText) return;
 
-    // Command: .group on ai (Enabled exclusively per group)
+    // Group commands
     if (isGroup && cleanText.toLowerCase() === ".group on ai") {
       await GroupSetting.findOneAndUpdate(
         { groupId: jid },
@@ -110,7 +113,6 @@ async function startNethuBot() {
       return;
     }
 
-    // Command to disable if needed: .group off ai
     if (isGroup && cleanText.toLowerCase() === ".group off ai") {
       await GroupSetting.findOneAndUpdate(
         { groupId: jid },
@@ -123,21 +125,15 @@ async function startNethuBot() {
       return;
     }
 
-    // Checking permissions:
-    // 1. Inbox: Always works.
-    // 2. Group: Only works if enabled via .group on ai.
+    // Checking inbox/group permissions
     if (isGroup) {
       const setting = await GroupSetting.findOne({ groupId: jid });
-      if (!setting || !setting.aiEnabled) {
-        return; // Group එකේ AI on කර නැතිනම් කිසිදු reply එකක් නොයවයි
-      }
+      if (!setting || !setting.aiEnabled) return;
     }
 
-    // Reaction එකක් දමා typing status පෙන්වීම
+    // Reaction and AI Reply
     try {
-      await sock.sendMessage(jid, {
-        react: { text: "❤️", key: msg.key }
-      });
+      await sock.sendMessage(jid, { react: { text: "❤️", key: msg.key } });
       await sock.sendPresenceUpdate("composing", jid);
 
       const aiReply = await askNethuAI(cleanText);
@@ -148,6 +144,41 @@ async function startNethuBot() {
       console.error("Message handling error:", err);
     }
   });
+
+  return sock;
 }
 
-startNethuBot().catch(console.error);
+// Pairing Endpoint
+app.get("/pair", async (req, res) => {
+  let num = req.query.number;
+  if (!num) return res.status(400).json({ error: "දුරකථන අංකය අවශ්‍යයි." });
+
+  num = num.replace(/[^0-9]/g, "");
+
+  try {
+    // Registered නැත්නම් පමණක් pairing code එක ඉල්ලන්න
+    if (!sock || !sock.authState.creds.registered) {
+      await initWhatsApp(true);
+      await delay(2000); // Socket එක සූදානම් වීමට තත්පර 2ක්
+      const code = await sock.requestPairingCode(num);
+      return res.json({ code: code?.match(/.{1,4}/g)?.join("-") || code });
+    } else {
+      return res.status(400).json({ error: "බොට් දැනටමත් වෙනත් අංකයකට Link වී ඇත!" });
+    }
+  } catch (err) {
+    console.error("Pairing Error:", err);
+    return res.status(500).json({ error: "Pairing code එක ලබාගැනීමට නොහැකි විය. නැවත උත්සාහ කරන්න." });
+  }
+});
+
+// App Startup
+async function startServer() {
+  await connectDB(config.MONGODB_URI);
+  app.listen(config.PORT, () => {
+    console.log(`🌸 Nethu AI Pairing Web Site is live on port ${config.PORT}`);
+  });
+  // ආරම්භයේදීම පවතින session එක load කර සම්බන්ධ වීම
+  await initWhatsApp();
+}
+
+startServer().catch(console.error);
