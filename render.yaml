@@ -5,10 +5,13 @@ services:
     plan: free
     buildCommand: npm install
     startCommand: npm start
+    healthCheckPath: /health
     envVars:
       - key: MONGODB_URI
         sync: false
       - key: OPENROUTER_API_KEY
+        sync: false
+      - key: PAIR_KEY
         sync: false
       - key: SESSION_ID
         value: nethu_session
