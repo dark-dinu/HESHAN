@@ -1,102 +1,240 @@
 <!DOCTYPE html>
 <html lang="si">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Nethu AI - Web Pairing Portal</title>
-  <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, sans-serif; }
-    body { background: radial-gradient(circle at top, #2d0b28, #110515); color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
-    .card { background: rgba(255,255,255,.05); backdrop-filter: blur(12px); border: 1px solid rgba(255,105,180,.3); padding: 30px; border-radius: 20px; width: 100%; max-width: 420px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
-    h1 { color: #ff69b4; font-size: 26px; margin-bottom: 8px; }
-    p { font-size: 14px; color: #d8b4e2; margin-bottom: 20px; line-height: 1.5; }
-    input { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #ff69b4; background: rgba(0,0,0,.4); color: #fff; font-size: 16px; text-align: center; margin-bottom: 12px; outline: none; }
-    input::placeholder { color: #888; }
-    button { width: 100%; padding: 14px; background: linear-gradient(135deg,#ff1493,#c71585); color: #fff; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; }
-    button:disabled { background: #555; cursor: not-allowed; }
-    .code-box { margin-top: 22px; padding: 14px; background: rgba(255,105,180,.15); border: 2px dashed #ff69b4; border-radius: 10px; display: none; }
-    .code-text { font-size: 28px; letter-spacing: 4px; font-weight: bold; color: #00ffcc; cursor: pointer; margin: 6px 0; }
-    .hint { font-size: 12px; color: #bbb; line-height: 1.6; text-align: left; margin-top: 10px; }
-    .status-msg { margin-top: 14px; font-size: 13px; color: #ffeb3b; min-height: 18px; }
-    .ok { color: #00ffcc; }
-    #keyRow { display: none; }
-  </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0b1220">
+<title>{{BOT_NAME}} • Pair</title>
+<style>
+  :root{
+    --bg:#0b1220; --card:rgba(255,255,255,.06); --line:rgba(255,255,255,.12);
+    --text:#eef2f7; --muted:#9aa7ba; --green:#25d366; --teal:#128c7e; --err:#ff6b6b;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{min-height:100%}
+  body{
+    font-family:system-ui,-apple-system,"Segoe UI","Noto Sans Sinhala","Iskoola Pota",sans-serif;
+    background:var(--bg);color:var(--text);
+    display:flex;align-items:center;justify-content:center;
+    padding:max(20px,env(safe-area-inset-top)) 16px max(20px,env(safe-area-inset-bottom));
+    overflow-x:hidden;position:relative;
+  }
+  .blob{position:fixed;border-radius:50%;filter:blur(80px);opacity:.45;z-index:0;animation:float 14s ease-in-out infinite}
+  .b1{width:340px;height:340px;background:var(--green);top:-100px;left:-100px}
+  .b2{width:320px;height:320px;background:#2563eb;bottom:-120px;right:-80px;animation-delay:-5s}
+  .b3{width:240px;height:240px;background:#a855f7;top:45%;left:55%;opacity:.25;animation-delay:-9s}
+  @keyframes float{0%,100%{transform:translate(0,0)}50%{transform:translate(30px,-40px)}}
+
+  .card{
+    position:relative;z-index:1;width:100%;max-width:430px;
+    background:var(--card);border:1px solid var(--line);border-radius:26px;
+    padding:30px 24px;backdrop-filter:blur(22px);-webkit-backdrop-filter:blur(22px);
+    box-shadow:0 20px 60px rgba(0,0,0,.45);
+  }
+  .logo{
+    width:68px;height:68px;border-radius:20px;margin:0 auto 16px;
+    background:linear-gradient(135deg,var(--green),var(--teal));
+    display:grid;place-items:center;font-size:34px;
+    box-shadow:0 10px 30px rgba(37,211,102,.35);
+  }
+  h1{font-size:22px;text-align:center;font-weight:700}
+  .sub{color:var(--muted);text-align:center;font-size:14px;margin:6px 0 24px;line-height:1.5}
+
+  label{display:block;font-size:13px;color:var(--muted);margin-bottom:8px}
+  .field{
+    display:flex;align-items:center;gap:10px;
+    background:rgba(0,0,0,.28);border:1px solid var(--line);border-radius:14px;padding:0 14px;
+    transition:.2s;
+  }
+  .field:focus-within{border-color:var(--green);box-shadow:0 0 0 3px rgba(37,211,102,.18)}
+  .field span{font-size:18px}
+  input{
+    flex:1;background:none;border:0;outline:0;color:var(--text);
+    font-size:17px;padding:15px 0;letter-spacing:.5px;min-width:0;
+  }
+  input::placeholder{color:#5f6c80}
+  .hint{font-size:12px;color:var(--muted);margin-top:8px}
+
+  button.main{
+    width:100%;margin-top:18px;padding:15px;border:0;border-radius:14px;cursor:pointer;
+    font-size:16px;font-weight:700;color:#04150a;
+    background:linear-gradient(135deg,var(--green),#5ef08f);
+    box-shadow:0 10px 26px rgba(37,211,102,.3);transition:.2s;
+  }
+  button.main:hover{transform:translateY(-1px)}
+  button.main:disabled{opacity:.6;cursor:wait;transform:none}
+  button.ghost{
+    width:100%;margin-top:12px;padding:13px;border-radius:14px;cursor:pointer;
+    background:transparent;border:1px solid var(--line);color:var(--text);font-size:15px;
+  }
+  .err{color:var(--err);font-size:13.5px;margin-top:12px;text-align:center;min-height:0}
+
+  .code{display:flex;justify-content:center;align-items:center;gap:6px;margin:6px 0 4px;flex-wrap:nowrap}
+  .code b{
+    width:34px;height:46px;border-radius:10px;display:grid;place-items:center;
+    background:rgba(0,0,0,.35);border:1px solid var(--line);
+    font-size:24px;font-weight:800;font-family:ui-monospace,Menlo,Consolas,monospace;
+    animation:pop .4s ease both;
+  }
+  .code i{color:var(--muted);font-style:normal;font-size:22px;padding:0 2px}
+  @keyframes pop{from{opacity:0;transform:translateY(8px) scale(.9)}to{opacity:1;transform:none}}
+  .timer{text-align:center;color:var(--muted);font-size:13px;margin:10px 0 4px}
+  .timer em{color:var(--green);font-style:normal;font-weight:700}
+
+  ol{margin:18px 0 0;padding:0;list-style:none;counter-reset:s}
+  ol li{
+    counter-increment:s;display:flex;gap:12px;align-items:flex-start;
+    font-size:14px;color:#cfd8e6;line-height:1.5;margin-bottom:11px;
+  }
+  ol li::before{
+    content:counter(s);flex:none;width:24px;height:24px;border-radius:50%;
+    background:rgba(37,211,102,.16);color:var(--green);font-weight:700;font-size:13px;
+    display:grid;place-items:center;margin-top:1px;
+  }
+  .pulse{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--green);margin-right:6px;animation:pl 1.4s infinite}
+  @keyframes pl{0%{box-shadow:0 0 0 0 rgba(37,211,102,.7)}100%{box-shadow:0 0 0 10px rgba(37,211,102,0)}}
+
+  .done{text-align:center}
+  .tick{
+    width:84px;height:84px;border-radius:50%;margin:4px auto 16px;display:grid;place-items:center;
+    background:linear-gradient(135deg,var(--green),var(--teal));font-size:42px;
+    animation:pop .5s ease both;box-shadow:0 0 0 10px rgba(37,211,102,.12);
+  }
+  .done p{color:var(--muted);font-size:14px;line-height:1.6;margin-top:8px}
+  .done code{background:rgba(0,0,0,.35);padding:2px 8px;border-radius:8px;color:var(--green)}
+
+  .foot{margin-top:24px;text-align:center;font-size:12.5px;color:var(--muted)}
+  [hidden]{display:none!important}
+</style>
 </head>
 <body>
-<div class="card">
-  <h1>🌸 Nethu AI Linker</h1>
-  <p>ඔබගේ WhatsApp අංකය රටේ කේතය සමඟ ඇතුළත් කර Pairing Code එක ලබාගන්න.</p>
+<div class="blob b1"></div><div class="blob b2"></div><div class="blob b3"></div>
 
-  <div id="keyRow"><input type="password" id="key" placeholder="Access key" /></div>
-  <input type="tel" id="phone" placeholder="උදා: 94771234567" inputmode="numeric" />
-  <button id="btn" onclick="getPairingCode()">Pairing Code එක ගන්න 💖</button>
+<main class="card">
+  <div class="logo">🤖</div>
+  <h1>{{BOT_NAME}}</h1>
 
-  <div id="status" class="status-msg"></div>
+  <!-- FORM -->
+  <section id="formView">
+    <p class="sub">ඔයාගේ WhatsApp number එක දීලා Pairing Code එක ගන්න.<br>QR scan කරන්න ඕන නෑ ✨</p>
+    <form id="form" autocomplete="off">
+      <label for="num">WhatsApp Number</label>
+      <div class="field">
+        <span>📱</span>
+        <input id="num" type="tel" inputmode="numeric" placeholder="94771234567" required>
+      </div>
+      <p class="hint">Country code එක්ක දෙන්න, + නැතුව. (0771234567 කියලත් ගහන්න පුලුවන්)</p>
+      <button class="main" id="go" type="submit">Pairing Code ගන්න</button>
+      <p class="err" id="err"></p>
+    </form>
+  </section>
 
-  <div class="code-box" id="codeBox">
-    <div style="font-size:12px">ඔබගේ Pairing Code එක:</div>
-    <div class="code-text" id="codeDisplay" onclick="copyCode()">--------</div>
-    <div style="font-size:11px;color:#aaa">(Click කර Copy කරගන්න)</div>
-    <div class="hint">
-      WhatsApp → Settings → Linked Devices → Link a device →
-      <b>Link with phone number instead</b> → මේ code එක ඇතුළත් කරන්න.
-    </div>
-  </div>
-</div>
+  <!-- CODE -->
+  <section id="codeView" hidden>
+    <p class="sub">මේ code එක WhatsApp එකට ගහන්න 👇</p>
+    <div class="code" id="code"></div>
+    <p class="timer"><span class="pulse"></span>Link වෙනකම් බලාගෙන ඉන්නවා • <em id="left">3:00</em></p>
+    <button class="ghost" id="copy">📋 Code එක copy කරන්න</button>
+    <ol>
+      <li>ඔයාගේ phone එකේ <b>WhatsApp</b> open කරන්න</li>
+      <li><b>Settings → Linked Devices</b> (නැත්නම් ⋮ menu එකේ)</li>
+      <li><b>Link a Device</b> → <b>Link with phone number instead</b></li>
+      <li>උඩ තියෙන code එක type කරන්න</li>
+    </ol>
+    <p class="err" id="err2"></p>
+    <button class="ghost" id="cancel">අවලංගු කරන්න</button>
+  </section>
+
+  <!-- DONE -->
+  <section id="doneView" class="done" hidden>
+    <div class="tick">✅</div>
+    <h1>සාර්ථකයි!</h1>
+    <p>Bot සම්බන්ධ උනා. දැන් ඕන chat එකක <code>.ping</code> කියලා type කරලා බලන්න 🏓<br>Session එක auto save උනා, ආයෙ link කරන්න ඕන නෑ.</p>
+    <button class="ghost" id="again">තව number එකක් link කරන්න</button>
+  </section>
+
+  <p class="foot" id="stats">&nbsp;</p>
+</main>
 
 <script>
-  let poll = null;
-  const $ = (id) => document.getElementById(id);
+(function(){
+  var $ = function(s){return document.querySelector(s)};
+  var views = ['formView','codeView','doneView'];
+  var number = null, poll = null, tick = null, endAt = 0, curCode = '';
 
-  fetch('/status').then(r => r.json()).then(s => {
-    if (s.needsKey) $('keyRow').style.display = 'block';
-    if (s.connected) { $('status').className = 'status-msg ok'; $('status').innerText = 'Bot දැනටමත් Connected ✅'; }
-  }).catch(() => {});
+  function show(id){ views.forEach(function(v){ $('#'+v).hidden = v !== id; }); }
+  function stop(){ clearInterval(poll); clearInterval(tick); poll = tick = null; }
 
-  async function getPairingCode() {
-    const phone = $('phone').value.replace(/[^0-9]/g, '');
-    if (phone.length < 9) { $('status').innerText = 'කරුණාකර නිවැරදි අංකයක් ඇතුළත් කරන්න!'; return; }
-
-    $('btn').disabled = true;
-    $('status').className = 'status-msg';
-    $('status').innerText = 'Pairing Code එක සකසමින්... තත්පර 20ක් පමණ ගත විය හැක.';
-    $('codeBox').style.display = 'none';
-    clearInterval(poll);
-
-    try {
-      const key = $('key').value ? `&key=${encodeURIComponent($('key').value)}` : '';
-      const r = await fetch(`/pair?number=${phone}${key}`);
-      const data = await r.json();
-
-      if (data.code) {
-        $('status').innerText = 'Code එක ලැබුණා! දැන් WhatsApp එකේ ඇතුළත් කරන්න.';
-        $('codeDisplay').innerText = data.code;
-        $('codeBox').style.display = 'block';
-        poll = setInterval(async () => {
-          try {
-            const s = await (await fetch('/status')).json();
-            if (s.connected) {
-              clearInterval(poll);
-              $('status').className = 'status-msg ok';
-              $('status').innerText = 'සාර්ථකව Link වුණා! Bot Online ✅';
-            }
-          } catch {}
-        }, 3000);
-      } else {
-        $('status').innerText = data.error || 'නැවත උත්සාහ කරන්න.';
-      }
-    } catch {
-      $('status').innerText = 'සම්බන්ධතා දෝෂයක්. සර්වර් එක චෙක් කරන්න.';
-    } finally {
-      $('btn').disabled = false;
+  function renderCode(code){
+    curCode = code;
+    var c = $('#code'); c.innerHTML = '';
+    for (var i = 0; i < code.length; i++){
+      if (i === 4){ var d = document.createElement('i'); d.textContent = '-'; c.appendChild(d); }
+      var b = document.createElement('b'); b.textContent = code[i]; b.style.animationDelay = (i*40)+'ms';
+      c.appendChild(b);
     }
   }
 
-  function copyCode() {
-    const code = $('codeDisplay').innerText;
-    navigator.clipboard?.writeText(code);
-    $('status').innerText = 'Copy කරගත්තා: ' + code;
+  function startTimer(sec){
+    endAt = Date.now() + sec*1000;
+    clearInterval(tick);
+    tick = setInterval(function(){
+      var s = Math.max(0, Math.round((endAt - Date.now())/1000));
+      $('#left').textContent = Math.floor(s/60) + ':' + String(s%60).padStart(2,'0');
+      if (s <= 0) expired();
+    }, 500);
   }
+
+  function expired(){
+    stop(); show('formView');
+    $('#err').textContent = 'Code එකේ කාලය ඉවරයි. ආයෙ code එකක් ගන්න.';
+  }
+
+  function startPolling(){
+    clearInterval(poll);
+    poll = setInterval(function(){
+      fetch('/api/status?number=' + number).then(function(r){return r.json()}).then(function(d){
+        if (d.status === 'connected'){ stop(); show('doneView'); loadStats(); }
+        else if (d.status === 'none'){ expired(); }
+        else if (d.code && d.code !== curCode){ renderCode(d.code); }
+      }).catch(function(){});
+    }, 2500);
+  }
+
+  $('#form').addEventListener('submit', function(e){
+    e.preventDefault();
+    var btn = $('#go'); $('#err').textContent = '';
+    btn.disabled = true; btn.textContent = 'Code එක හදනවා...';
+    fetch('/api/pair', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ number: $('#num').value })
+    }).then(function(r){ return r.json().then(function(d){ return {ok:r.ok, d:d}; }); })
+    .then(function(res){
+      if (!res.ok) throw new Error(res.d.error || 'Error');
+      number = res.d.number;
+      if (res.d.state === 'connected'){ show('doneView'); return; }
+      renderCode(res.d.code); startTimer(res.d.expiresIn || 180); show('codeView'); startPolling();
+    }).catch(function(err){ $('#err').textContent = err.message; })
+    .finally(function(){ btn.disabled = false; btn.textContent = 'Pairing Code ගන්න'; });
+  });
+
+  $('#copy').addEventListener('click', function(){
+    var t = this, orig = t.textContent;
+    function ok(){ t.textContent = '✅ Copy උනා!'; setTimeout(function(){ t.textContent = orig; }, 1500); }
+    if (navigator.clipboard) navigator.clipboard.writeText(curCode).then(ok).catch(ok);
+    else { var i = document.createElement('input'); i.value = curCode; document.body.appendChild(i); i.select(); document.execCommand('copy'); i.remove(); ok(); }
+  });
+
+  $('#cancel').addEventListener('click', function(){ stop(); show('formView'); });
+  $('#again').addEventListener('click', function(){ $('#num').value = ''; show('formView'); });
+
+  function loadStats(){
+    fetch('/api/stats').then(function(r){return r.json()}).then(function(d){
+      $('#stats').innerHTML = '🟢 Active bots: <b>' + d.bots + '</b>';
+    }).catch(function(){});
+  }
+  loadStats();
+})();
 </script>
 </body>
 </html>
