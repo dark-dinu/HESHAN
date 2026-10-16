@@ -2,27 +2,23 @@ const {
   default: makeWASocket,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  delay,
-  useMultiFileAuthState,
-  Browsers
+  delay
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const express = require("express");
 const path = require("path");
-const fs = require("fs");
 const axios = require("axios");
 const config = require("./config");
-const { connectDB, saveSessionToMongo, getSessionFromMongo, GroupSetting } = require("./database");
+const { connectDB, useMongoAuthState, GroupSetting } = require("./database");
 
 const app = express();
 app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json());
 
-const SESSION_DIR = path.join(__dirname, "session_auth");
-let mainSock = null;
+let sock = null;
 
-// OpenRouter AI Response Logic
-async function askNethuAI(userMessage) {
+// OpenRouter AI Call
+async function askNethuAI(text) {
   try {
     const res = await axios.post(
       "https://openrouter.ai/api/v1/chat/completions",
@@ -30,7 +26,7 @@ async function askNethuAI(userMessage) {
         model: "meta-llama/llama-3.3-70b-instruct:free",
         messages: [
           { role: "system", content: config.SYSTEM_PROMPT },
-          { role: "user", content: userMessage }
+          { role: "user", content: text }
         ],
         max_tokens: 150,
         temperature: 0.85
@@ -43,15 +39,14 @@ async function askNethuAI(userMessage) {
       }
     );
     return res.data.choices[0]?.message?.content?.trim();
-  } catch (error) {
-    console.error("OpenRouter Error:", error?.response?.data || error.message);
-    return "අනේ මට පොඩ්ඩක් මහන්සියි වගේ පැටියෝ.. පස්සෙ කතා කරමුද? 🥺❤️";
+  } catch (err) {
+    return "අනේ මට මහන්සියි වගේ පැටියෝ.. පස්සෙ කතා කරමුද? 🥺❤️";
   }
 }
 
-// Bot Command Handlers
-function setupBotEvents(client) {
-  client.ev.on("messages.upsert", async ({ messages, type }) => {
+// Bot Messages & Commands
+function registerEvents(socket) {
+  socket.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
     const msg = messages[0];
     if (!msg.message || msg.key.fromMe) return;
@@ -64,28 +59,29 @@ function setupBotEvents(client) {
       msg.message.extendedTextMessage?.text ||
       "";
 
-    const cleanText = text.trim();
-    if (!cleanText) return;
+    const clean = text.trim();
+    if (!clean) return;
 
-    if (isGroup && cleanText.toLowerCase() === ".group on ai") {
+    // Group commands
+    if (isGroup && clean.toLowerCase() === ".group on ai") {
       await GroupSetting.findOneAndUpdate(
         { groupId: jid },
         { groupId: jid, aiEnabled: true },
         { upsert: true }
       );
-      await client.sendMessage(jid, {
-        text: "මෙන්න මං ආවා! දැන් මේ group එකේ මං ඔයාලත් එක්ක ඉන්නවා.. 😘🙈"
+      await socket.sendMessage(jid, {
+        text: "මෙන්න මං ආවා! දැන් මේ group එකේ මං ඉන්නවා.. 😘🙈"
       }, { quoted: msg });
       return;
     }
 
-    if (isGroup && cleanText.toLowerCase() === ".group off ai") {
+    if (isGroup && clean.toLowerCase() === ".group off ai") {
       await GroupSetting.findOneAndUpdate(
         { groupId: jid },
         { groupId: jid, aiEnabled: false },
         { upsert: true }
       );
-      await client.sendMessage(jid, {
+      await socket.sendMessage(jid, {
         text: "හා හා මං යන්නම් එහෙනම්.. බායි! 🥺💔"
       }, { quoted: msg });
       return;
@@ -97,141 +93,104 @@ function setupBotEvents(client) {
     }
 
     try {
-      await client.sendMessage(jid, { react: { text: "❤️", key: msg.key } });
-      await client.sendPresenceUpdate("composing", jid);
+      await socket.sendMessage(jid, { react: { text: "❤️", key: msg.key } });
+      await socket.sendPresenceUpdate("composing", jid);
 
-      const aiReply = await askNethuAI(cleanText);
+      const reply = await askNethuAI(clean);
 
-      await client.sendMessage(jid, { text: aiReply }, { quoted: msg });
-      await client.sendPresenceUpdate("paused", jid);
-    } catch (err) {
-      console.error("Message Error:", err);
+      await socket.sendMessage(jid, { text: reply }, { quoted: msg });
+      await socket.sendPresenceUpdate("paused", jid);
+    } catch (e) {
+      console.error("Message Error:", e);
     }
   });
 }
 
-// Backup local folder to MongoDB
-async function syncSessionToMongo() {
-  try {
-    if (!fs.existsSync(SESSION_DIR)) return;
-    const files = fs.readdirSync(SESSION_DIR);
-    const sessionObj = {};
-    for (const file of files) {
-      sessionObj[file] = fs.readFileSync(path.join(SESSION_DIR, file), "base64");
-    }
-    await saveSessionToMongo(config.SESSION_ID, JSON.stringify(sessionObj));
-    console.log("Session backed up to MongoDB successfully.");
-  } catch (err) {
-    console.error("Failed to sync session:", err);
-  }
-}
-
-// Restore folder from MongoDB
-async function restoreSessionFromMongo() {
-  try {
-    const raw = await getSessionFromMongo(config.SESSION_ID);
-    if (!raw) return false;
-    const sessionObj = JSON.parse(raw);
-    if (!fs.existsSync(SESSION_DIR)) {
-      fs.mkdirSync(SESSION_DIR, { recursive: true });
-    }
-    for (const [file, b64] of Object.entries(sessionObj)) {
-      fs.writeFileSync(path.join(SESSION_DIR, file), Buffer.from(b64, "base64"));
-    }
-    return true;
-  } catch (err) {
-    console.error("Failed to restore session:", err);
-    return false;
-  }
-}
-
-// Start Main WhatsApp Connection
+// Core WhatsApp Connection
 async function startNethuBot() {
-  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
+  const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
   const { version } = await fetchLatestBaileysVersion();
 
-  mainSock = makeWASocket({
+  sock = makeWASocket({
     version,
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
     auth: state,
-    browser: Browsers.macOS("Desktop"),
+    browser: ["Ubuntu", "Chrome", "20.0.04"],
     syncFullHistory: false
   });
 
-  mainSock.ev.on("creds.update", async () => {
-    await saveCreds();
-    await syncSessionToMongo();
-  });
+  sock.ev.on("creds.update", saveCreds);
 
-  mainSock.ev.on("connection.update", async (update) => {
+  sock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update;
 
     if (connection === "open") {
-      console.log("🌸 Nethu AI Bot Connected & Online!");
-      await syncSessionToMongo();
-      setupBotEvents(mainSock);
+      console.log("🌸 Nethu AI Bot සම්පූර්ණයෙන් Auto-Connect වී සක්‍රීයයි!");
     } else if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log(`Connection closed: ${statusCode}. Reconnecting: ${shouldReconnect}`);
+      console.log(`සම්බන්ධතාව විසන්ධි විය (${statusCode}). නැවත සම්බන්ධ වෙමින්: ${shouldReconnect}`);
       if (shouldReconnect) {
         setTimeout(startNethuBot, 3000);
       }
     }
   });
 
-  return mainSock;
+  registerEvents(sock);
+  return sock;
 }
 
-// Web Pairing Endpoint
+// Pairing Endpoint
 app.get("/pair", async (req, res) => {
   let num = req.query.number;
-  if (!num) return res.status(400).json({ error: "අංකය ඇතුළත් කරන්න." });
+  if (!num) return res.status(400).json({ error: "දුරකථන අංකය අවශ්‍යයි." });
 
   num = num.replace(/[^0-9]/g, "");
 
-  // Clear existing session directory to start a clean handshake
-  if (fs.existsSync(SESSION_DIR)) {
-    fs.rmSync(SESSION_DIR, { recursive: true, force: true });
-  }
-
-  const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
-  const { version } = await fetchLatestBaileysVersion();
-
   try {
-    mainSock = makeWASocket({
+    const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
+
+    if (state.creds && state.creds.registered) {
+      return res.status(400).json({ error: "බොට් දැනටමත් Link වී ඇත!" });
+    }
+
+    const { version } = await fetchLatestBaileysVersion();
+
+    sock = makeWASocket({
       version,
       logger: pino({ level: "silent" }),
       printQRInTerminal: false,
       auth: state,
-      browser: Browsers.macOS("Desktop")
+      browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
 
-    mainSock.ev.on("creds.update", async () => {
-      await saveCreds();
-      await syncSessionToMongo();
-    });
+    sock.ev.on("creds.update", saveCreds);
 
-    mainSock.ev.on("connection.update", async (update) => {
-      const { connection } = update;
+    sock.ev.on("connection.update", async (update) => {
+      const { connection, lastDisconnect } = update;
       if (connection === "open") {
-        console.log("🌸 Pairing complete, Bot is now ready!");
-        await syncSessionToMongo();
-        setupBotEvents(mainSock);
+        console.log("🌸 WhatsApp Pair වීම සාර්ථකයි! Session එක MongoDB හි Save විය.");
+        registerEvents(sock);
+      } else if (connection === "close") {
+        const code = lastDisconnect?.error?.output?.statusCode;
+        if (code !== DisconnectReason.loggedOut) {
+          startNethuBot();
+        }
       }
     });
 
-    // Wait 3.5 seconds to ensure WebSocket Handshake is fully established
-    await delay(3500);
+    // WebSocket handshake එක සඳහා ප්‍රමාණවත් කාලයක් ලබා දීම
+    await delay(5000);
 
-    const code = await mainSock.requestPairingCode(num);
-    const formatted = code?.match(/.{1,4}/g)?.join("-") || code;
-    console.log(`Pairing code issued: ${formatted}`);
-    return res.json({ code: formatted });
+    const rawCode = await sock.requestPairingCode(num);
+    const code = rawCode?.match(/.{1,4}/g)?.join("-") || rawCode;
+    console.log(`Pairing code එක ලබාදුන්නා: ${code}`);
+
+    return res.json({ code });
   } catch (err) {
     console.error("Pairing failure:", err);
-    return res.status(500).json({ error: "කේතය ලබා ගැනීමට නොහැකි විය. නැවත උත්සාහ කරන්න." });
+    return res.status(500).json({ error: "කේතය ලබාගැනීමට නොහැකි විය. කරුණාකර තත්පර 10කින් නැවත උත්සාහ කරන්න." });
   }
 });
 
@@ -240,15 +199,15 @@ async function startServer() {
   await connectDB(config.MONGODB_URI);
 
   app.listen(config.PORT, () => {
-    console.log(`🌸 Nethu AI Server running on port ${config.PORT}`);
+    console.log(`🌸 Nethu AI Server එක Port ${config.PORT} හි ක්‍රියාත්මකයි.`);
   });
 
-  const hasSession = await restoreSessionFromMongo();
-  if (hasSession && fs.existsSync(path.join(SESSION_DIR, "creds.json"))) {
-    console.log("Found saved session in MongoDB. Connecting...");
+  const { state } = await useMongoAuthState(config.SESSION_ID);
+  if (state.creds && state.creds.registered) {
+    console.log("පවතින Session එක හමු විය. Auto Connecting...");
     await startNethuBot();
   } else {
-    console.log("No session found. Open Web Site to link your device.");
+    console.log("නව Session එකක් නොමැත. Pairing Site එක මඟින් Link කරන්න.");
   }
 }
 
