@@ -19,6 +19,9 @@ const {
   Memory
 } = require("./database");
 
+// වෙනම වෙන් කරගත් Ping කමාන්ඩ් එක රික්වෙයාර් කරගැනීම
+const pingCommand = require("./commands/ping");
+
 const logger = pino({ level: process.env.LOG_LEVEL || "warn" });
 const app = express();
 app.use(express.static(path.join(__dirname, "public")));
@@ -143,7 +146,7 @@ function registerEvents(socket) {
 async function handleMessage(socket, msg) {
   if (!msg || !msg.key) return;
 
-  // බොට් විසින්ම යැවූ මැසේජ් එකක් නම් නොසලකා හරින්න (Infinite Loop වැළැක්වීමට)
+  // බොට් විසින්ම යැවූ මැසේජ් එකක් නම් නොසලකා හරින්න
   if (sentMessages.has(msg.key.id)) return;
 
   if (!msg.message) {
@@ -151,7 +154,6 @@ async function handleMessage(socket, msg) {
     return;
   }
 
-  // Protocol / Reaction / System messages නොසලකා හරින්න
   if (
     msg.message.protocolMessage ||
     msg.message.reactionMessage ||
@@ -173,13 +175,13 @@ async function handleMessage(socket, msg) {
   const lower = clean.toLowerCase();
   console.log(`💬 msg jid=${jid} fromMe=${!!msg.key.fromMe} group=${isGroup} len=${clean.length} text="${clean}"`);
 
-  // Test command: AI නැතුව bot ජීවතුන් අතර ඉන්නවාද බලන්න
-  if (lower === ".ping") {
-    await sendSafeMessage(socket, jid, { text: "pong 🏓 Nethu online ❤️" }, { quoted: msg });
+  // .ping කමාන්ඩ් එක commands/ping.js ෆයිල් එකෙන් ක්‍රියාත්මක වීම
+  if (lower === pingCommand.name) {
+    await pingCommand.execute(socket, msg, clean);
     return;
   }
 
-  // Commands (owner ගේ අංකයෙන් එවනවා නම් fromMe වුනත් වැඩ කරනවා)
+  // Group commands
   if (isGroup && lower === ".group on ai") {
     await GroupSetting.updateOne({ groupId: jid }, { $set: { aiEnabled: true } }, { upsert: true });
     await sendSafeMessage(socket, jid, { text: "මෙන්න මං ආවා! දැන් මේ group එකේ මං ඉන්නවා.. 😘🙈" }, { quoted: msg });
@@ -191,7 +193,6 @@ async function handleMessage(socket, msg) {
     return;
   }
 
-  // Self-chat (Message Yourself) හැර වෙනත් අයට ඔබ යවන මැසේජ් වලට බොට් රිප්ලයි කිරීම වැළැක්වීමට
   const botNumber = socket.user?.id ? socket.user.id.split(":")[0] + "@s.whatsapp.net" : "";
   const botLid = socket.user?.lid ? socket.user.lid.split(":")[0] + "@lid" : "";
   const isSelfChat = jid === botNumber || (botLid && jid === botLid);
@@ -216,19 +217,15 @@ async function getVersion() {
     const { version } = await fetchLatestBaileysVersion();
     return version;
   } catch {
-    return undefined; // Baileys default version භාවිතා වේ
+    return undefined;
   }
 }
 
-/**
- * Socket එකක් හදනවා. pairNumber දුන්නොත් pairing code එකක් ඉල්ලලා onCode(code) call කරනවා.
- */
 async function startSocket({ pairNumber, onCode, onError } = {}) {
   const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
   registered = !!state.creds.registered;
   const version = await getVersion();
 
-  // කලින් socket එක නිසි ලෙස වසා දමන්න
   if (sock) {
     const old = sock;
     sock = null;
@@ -259,10 +256,9 @@ async function startSocket({ pairNumber, onCode, onError } = {}) {
 
   let codeRequested = false;
   s.ev.on("connection.update", async (update) => {
-    if (s !== sock) return; // පරණ socket එකකින් එන events නොසලකන්න
+    if (s !== sock) return;
     const { connection, lastDisconnect, qr } = update;
 
-    // Pairing code: WhatsApp server එක ready වුණාම (qr event) code එක ඉල්ලනවා
     if (pairNumber && qr && !codeRequested && !state.creds.registered) {
       codeRequested = true;
       try {
@@ -296,13 +292,11 @@ async function startSocket({ pairNumber, onCode, onError } = {}) {
         return;
       }
 
-      // 515 = link වුණාට පස්සේ WhatsApp ඉල්ලන restart එක (අනිවාර්යයි)
       if (code === DisconnectReason.restartRequired) {
-        await sleep(1000); // creds save වෙන්න ඉඩ දෙන්න
+        await sleep(1000);
         return startSocket().catch((e) => console.error("Restart failed:", e.message));
       }
 
-      // Link වී නැති pairing socket එකක් timeout වුණොත් නැවත නොසම්බන්ධ වෙන්න
       if (!state.creds.registered) {
         sock = null;
         return;
@@ -340,13 +334,11 @@ app.get("/pair", async (req, res) => {
   if (num.length < 9 || num.length > 15) {
     return res.status(400).json({ error: "රටේ කේතය සමඟ නිවැරදි අංකයක් ඇතුළත් කරන්න (උදා: 94771234567)." });
   }
-  // Link වී ඇත්නම් (තාවකාලිකව offline වුනත්) saved session එක කිසිවිටක් මකන්න එපා
   if (registered) {
     return res.status(400).json({ error: "බොට් දැනටමත් Link වී ඇත! (Auto connect වෙමින් පවතී)" });
   }
 
   try {
-    // අඩක් හැදුණු/පරණ session අයින් කරලා අලුතින් පටන් ගන්නවා
     await clearSession(config.SESSION_ID);
 
     let done = false;
@@ -387,7 +379,6 @@ async function startServer() {
     console.log("No active session found. Waiting for pairing request via web UI...");
   }
 
-  // Render free plan එක sleep නොවෙන්න
   if (process.env.RENDER_EXTERNAL_URL) {
     setInterval(() => {
       axios.get(`${process.env.RENDER_EXTERNAL_URL}/health`).catch(() => {});
