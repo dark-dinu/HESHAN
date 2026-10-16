@@ -18,6 +18,7 @@ app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json());
 
 let sock = null;
+let activePairSock = null; // Socket එක GC නොවී alive තියාගන්න
 
 // OpenRouter AI Call
 async function askNethuAI(userMessage) {
@@ -146,6 +147,25 @@ async function startNethuBot() {
   return sock;
 }
 
+// Transfer full multi-file auth session to MongoDB
+async function syncLocalAuthToMongo(sessionDir) {
+  const mongoose = require("mongoose");
+  const AuthModel = mongoose.model("Auth");
+  const files = fs.readdirSync(sessionDir);
+
+  for (const file of files) {
+    if (file.endsWith(".json")) {
+      const id = file.replace(".json", "");
+      const content = fs.readFileSync(path.join(sessionDir, file), "utf-8");
+      await AuthModel.findOneAndUpdate(
+        { sessionId: config.SESSION_ID, id },
+        { sessionId: config.SESSION_ID, id, value: content },
+        { upsert: true }
+      );
+    }
+  }
+}
+
 // Pairing Endpoint
 app.get("/pair", async (req, res) => {
   let num = req.query.number;
@@ -153,13 +173,16 @@ app.get("/pair", async (req, res) => {
 
   num = num.replace(/[^0-9]/g, "");
 
-  // Fast temp auth folder for instant pairing
-  const tempDir = path.join(__dirname, "temp_" + Date.now());
-  const { state, saveCreds } = await useMultiFileAuthState(tempDir);
+  const tempSessionDir = path.join(__dirname, "temp_session");
+  if (fs.existsSync(tempSessionDir)) {
+    fs.rmSync(tempSessionDir, { recursive: true, force: true });
+  }
+
+  const { state, saveCreds } = await useMultiFileAuthState(tempSessionDir);
   const { version } = await fetchLatestBaileysVersion();
 
   try {
-    const pairSock = makeWASocket({
+    activePairSock = makeWASocket({
       version,
       logger: pino({ level: "silent" }),
       printQRInTerminal: false,
@@ -167,55 +190,48 @@ app.get("/pair", async (req, res) => {
       browser: ["Ubuntu", "Chrome", "20.0.04"]
     });
 
-    pairSock.ev.on("creds.update", saveCreds);
+    activePairSock.ev.on("creds.update", saveCreds);
 
-    pairSock.ev.on("connection.update", async (update) => {
+    activePairSock.ev.on("connection.update", async (update) => {
       const { connection, lastDisconnect } = update;
 
       if (connection === "open") {
-        console.log("🌸 WhatsApp linked successfully! Migrating to MongoDB...");
-        // Temp folder එකෙන් creds අරන් MongoDB වලට save කිරීම
-        const mongoAuth = await useMongoAuthState(config.SESSION_ID);
-        const credsData = JSON.parse(fs.readFileSync(path.join(tempDir, "creds.json"), "utf-8"));
-        
-        // MongoDB එකේ save කරන්න
-        const mongoose = require("mongoose");
-        const AuthModel = mongoose.model("Auth");
-        await AuthModel.findOneAndUpdate(
-          { sessionId: config.SESSION_ID, id: "creds" },
-          { sessionId: config.SESSION_ID, id: "creds", value: JSON.stringify(credsData) },
-          { upsert: true }
-        );
+        console.log("🌸 WhatsApp linked successfully! Syncing keys to MongoDB...");
+        await delay(3000); // Key data files සම්පූර්ණයෙන්ම save වෙනකම් රැඳී සිටීම
+        await syncLocalAuthToMongo(tempSessionDir);
+        fs.rmSync(tempSessionDir, { recursive: true, force: true });
 
-        // Temp folder cleanup
-        fs.rmSync(tempDir, { recursive: true, force: true });
-
-        // Start permanent bot session
-        await pairSock.end();
-        setTimeout(startNethuBot, 2000);
+        // Main bot socket එක බවට පත් කිරීම
+        sock = activePairSock;
+        setupBotEvents(sock);
       } else if (connection === "close") {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         if (statusCode === DisconnectReason.loggedOut) {
-          fs.rmSync(tempDir, { recursive: true, force: true });
+          if (fs.existsSync(tempSessionDir)) {
+            fs.rmSync(tempSessionDir, { recursive: true, force: true });
+          }
         }
       }
     });
 
-    // Wait 2.5 seconds for socket connection before requesting pairing code
-    await delay(2500);
+    // WhatsApp server එකට socket එක connect වෙනකම් wait කිරීම
+    await delay(3000);
 
-    const rawCode = await pairSock.requestPairingCode(num);
+    const rawCode = await activePairSock.requestPairingCode(num);
     const code = rawCode?.match(/.{1,4}/g)?.join("-") || rawCode;
-    console.log(`Pairing Code created: ${code}`);
+    console.log(`Pairing code generated: ${code}`);
+
     return res.json({ code });
   } catch (err) {
     console.error("Pairing failure:", err);
-    fs.rmSync(tempDir, { recursive: true, force: true });
+    if (fs.existsSync(tempSessionDir)) {
+      fs.rmSync(tempSessionDir, { recursive: true, force: true });
+    }
     return res.status(500).json({ error: "කේතය ලබාගැනීමට නොහැකි විය. කරුණාකර නැවත උත්සාහ කරන්න." });
   }
 });
 
-// App Startup
+// Server Initialization
 async function startServer() {
   await connectDB(config.MONGODB_URI);
 
