@@ -1,41 +1,65 @@
 const mongoose = require("mongoose");
-const { proto } = require("@whiskeysockets/baileys");
+const {
+  proto,
+  initAuthCreds,
+  BufferJSON
+} = require("@whiskeysockets/baileys");
 
-const AuthSchema = new mongoose.Schema({
-  sessionId: { type: String, required: true },
-  id: { type: String, required: true },
-  value: { type: String, required: true }
-}, { versionKey: false });
-
+const AuthSchema = new mongoose.Schema(
+  {
+    sessionId: { type: String, required: true },
+    id: { type: String, required: true },
+    value: { type: String, required: true }
+  },
+  { versionKey: false }
+);
 AuthSchema.index({ sessionId: 1, id: 1 }, { unique: true });
-const AuthModel = mongoose.model("Auth", AuthSchema);
+const AuthModel = mongoose.models.Auth || mongoose.model("Auth", AuthSchema);
 
-const GroupSchema = new mongoose.Schema({
-  groupId: { type: String, required: true, unique: true },
-  aiEnabled: { type: Boolean, default: false }
-});
-const GroupSetting = mongoose.model("GroupSetting", GroupSchema);
+const GroupSetting =
+  mongoose.models.GroupSetting ||
+  mongoose.model(
+    "GroupSetting",
+    new mongoose.Schema({
+      groupId: { type: String, required: true, unique: true },
+      aiEnabled: { type: Boolean, default: false }
+    })
+  );
+
+const Memory =
+  mongoose.models.Memory ||
+  mongoose.model(
+    "Memory",
+    new mongoose.Schema({
+      jid: { type: String, required: true, unique: true },
+      messages: [
+        {
+          _id: false,
+          role: { type: String, enum: ["user", "assistant"] },
+          content: { type: String, required: true },
+          timestamp: { type: Date, default: Date.now }
+        }
+      ],
+      updatedAt: { type: Date, default: Date.now }
+    })
+  );
 
 async function connectDB(uri) {
-  if (!uri) throw new Error("MONGODB_URI is required!");
-  await mongoose.connect(uri);
+  if (!uri) throw new Error("MONGODB_URI (හෝ MONGO_URI) සකසා නැත!");
+  mongoose.set("strictQuery", true);
+  await mongoose.connect(uri, { serverSelectionTimeoutMS: 15000 });
   console.log("MongoDB සම්බන්ධතාවය සාර්ථකයි.");
+}
+
+async function clearSession(sessionId) {
+  await AuthModel.deleteMany({ sessionId });
 }
 
 async function useMongoAuthState(sessionId) {
   const writeData = async (data, id) => {
     try {
-      const value = JSON.stringify(data, (k, v) => {
-        if (Buffer.isBuffer(v)) {
-          return { type: "Buffer", data: Array.from(v) };
-        }
-        return v;
-      });
-      await AuthModel.findOneAndUpdate(
-        { sessionId, id },
-        { sessionId, id, value },
-        { upsert: true }
-      );
+      const value = JSON.stringify(data, BufferJSON.replacer);
+      await AuthModel.updateOne({ sessionId, id }, { $set: { value } }, { upsert: true });
     } catch (e) {
       console.error(`Auth save දෝෂය (${id}):`, e.message);
     }
@@ -43,14 +67,8 @@ async function useMongoAuthState(sessionId) {
 
   const readData = async (id) => {
     try {
-      const doc = await AuthModel.findOne({ sessionId, id });
-      if (!doc) return null;
-      return JSON.parse(doc.value, (k, v) => {
-        if (v && v.type === "Buffer" && Array.isArray(v.data)) {
-          return Buffer.from(v.data);
-        }
-        return v;
-      });
+      const doc = await AuthModel.findOne({ sessionId, id }).lean();
+      return doc ? JSON.parse(doc.value, BufferJSON.reviver) : null;
     } catch {
       return null;
     }
@@ -64,7 +82,8 @@ async function useMongoAuthState(sessionId) {
     }
   };
 
-  const creds = (await readData("creds")) || {};
+  // IMPORTANT: creds නැත්නම් සම්පූර්ණ අලුත් creds හදන්න ඕන ({} නෙවෙයි)
+  const creds = (await readData("creds")) || initAuthCreds();
 
   return {
     state: {
@@ -89,11 +108,7 @@ async function useMongoAuthState(sessionId) {
             for (const id in data[cat]) {
               const val = data[cat][id];
               const key = `${cat}-${id}`;
-              if (val) {
-                tasks.push(writeData(val, key));
-              } else {
-                tasks.push(removeData(key));
-              }
+              tasks.push(val ? writeData(val, key) : removeData(key));
             }
           }
           await Promise.all(tasks);
@@ -104,4 +119,4 @@ async function useMongoAuthState(sessionId) {
   };
 }
 
-module.exports = { connectDB, useMongoAuthState, GroupSetting };
+module.exports = { connectDB, useMongoAuthState, clearSession, GroupSetting, Memory };
