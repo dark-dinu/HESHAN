@@ -5,137 +5,98 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Nethu AI - Web Pairing Portal</title>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
-    body {
-      background: radial-gradient(circle at top, #2d0b28, #110515);
-      color: #fff;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      min-height: 100vh;
-      padding: 20px;
-    }
-    .card {
-      background: rgba(255, 255, 255, 0.05);
-      backdrop-filter: blur(12px);
-      border: 1px solid rgba(255, 105, 180, 0.3);
-      padding: 30px;
-      border-radius: 20px;
-      width: 100%;
-      max-width: 420px;
-      text-align: center;
-      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
-    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: 'Segoe UI', Tahoma, sans-serif; }
+    body { background: radial-gradient(circle at top, #2d0b28, #110515); color: #fff; display: flex; justify-content: center; align-items: center; min-height: 100vh; padding: 20px; }
+    .card { background: rgba(255,255,255,.05); backdrop-filter: blur(12px); border: 1px solid rgba(255,105,180,.3); padding: 30px; border-radius: 20px; width: 100%; max-width: 420px; text-align: center; box-shadow: 0 10px 30px rgba(0,0,0,.5); }
     h1 { color: #ff69b4; font-size: 26px; margin-bottom: 8px; }
-    p { font-size: 14px; color: #d8b4e2; margin-bottom: 24px; line-height: 1.5; }
-    input {
-      width: 100%;
-      padding: 14px;
-      border-radius: 10px;
-      border: 1px solid #ff69b4;
-      background: rgba(0, 0, 0, 0.4);
-      color: #fff;
-      font-size: 16px;
-      text-align: center;
-      margin-bottom: 16px;
-      outline: none;
-    }
+    p { font-size: 14px; color: #d8b4e2; margin-bottom: 20px; line-height: 1.5; }
+    input { width: 100%; padding: 14px; border-radius: 10px; border: 1px solid #ff69b4; background: rgba(0,0,0,.4); color: #fff; font-size: 16px; text-align: center; margin-bottom: 12px; outline: none; }
     input::placeholder { color: #888; }
-    button {
-      width: 100%;
-      padding: 14px;
-      background: linear-gradient(135deg, #ff1493, #c71585);
-      color: white;
-      border: none;
-      border-radius: 10px;
-      font-size: 16px;
-      font-weight: bold;
-      cursor: pointer;
-      transition: 0.3s;
-    }
-    button:hover { opacity: 0.9; transform: scale(0.99); }
+    button { width: 100%; padding: 14px; background: linear-gradient(135deg,#ff1493,#c71585); color: #fff; border: none; border-radius: 10px; font-size: 16px; font-weight: bold; cursor: pointer; }
     button:disabled { background: #555; cursor: not-allowed; }
-    .code-box {
-      margin-top: 24px;
-      padding: 14px;
-      background: rgba(255, 105, 180, 0.15);
-      border: 2px dashed #ff69b4;
-      border-radius: 10px;
-      display: none;
-    }
-    .code-text {
-      font-size: 24px;
-      letter-spacing: 4px;
-      font-weight: bold;
-      color: #00ffcc;
-      cursor: pointer;
-      margin-top: 6px;
-    }
-    .copy-hint { font-size: 11px; color: #aaa; margin-top: 4px; }
-    .status-msg { margin-top: 15px; font-size: 13px; color: #ffeb3b; }
+    .code-box { margin-top: 22px; padding: 14px; background: rgba(255,105,180,.15); border: 2px dashed #ff69b4; border-radius: 10px; display: none; }
+    .code-text { font-size: 28px; letter-spacing: 4px; font-weight: bold; color: #00ffcc; cursor: pointer; margin: 6px 0; }
+    .hint { font-size: 12px; color: #bbb; line-height: 1.6; text-align: left; margin-top: 10px; }
+    .status-msg { margin-top: 14px; font-size: 13px; color: #ffeb3b; min-height: 18px; }
+    .ok { color: #00ffcc; }
+    #keyRow { display: none; }
   </style>
 </head>
 <body>
-
 <div class="card">
   <h1>🌸 Nethu AI Linker</h1>
-  <p>ඔබගේ WhatsApp අංකය රටේ කේතය (Country code) සමඟ ඇතුළත් කර Pairing Code එක ලබාගන්න.</p>
+  <p>ඔබගේ WhatsApp අංකය රටේ කේතය සමඟ ඇතුළත් කර Pairing Code එක ලබාගන්න.</p>
 
-  <input type="text" id="phone" placeholder="උදා: 94771234567" />
+  <div id="keyRow"><input type="password" id="key" placeholder="Access key" /></div>
+  <input type="tel" id="phone" placeholder="උදා: 94771234567" inputmode="numeric" />
   <button id="btn" onclick="getPairingCode()">Pairing Code එක ගන්න 💖</button>
 
   <div id="status" class="status-msg"></div>
 
   <div class="code-box" id="codeBox">
-    <div style="font-size: 12px; color: #fff;">ඔබගේ Pairing Code එක:</div>
+    <div style="font-size:12px">ඔබගේ Pairing Code එක:</div>
     <div class="code-text" id="codeDisplay" onclick="copyCode()">--------</div>
-    <div class="copy-hint">(Click කර Copy කරගන්න)</div>
+    <div style="font-size:11px;color:#aaa">(Click කර Copy කරගන්න)</div>
+    <div class="hint">
+      WhatsApp → Settings → Linked Devices → Link a device →
+      <b>Link with phone number instead</b> → මේ code එක ඇතුළත් කරන්න.
+    </div>
   </div>
 </div>
 
 <script>
+  let poll = null;
+  const $ = (id) => document.getElementById(id);
+
+  fetch('/status').then(r => r.json()).then(s => {
+    if (s.needsKey) $('keyRow').style.display = 'block';
+    if (s.connected) { $('status').className = 'status-msg ok'; $('status').innerText = 'Bot දැනටමත් Connected ✅'; }
+  }).catch(() => {});
+
   async function getPairingCode() {
-    const phoneInput = document.getElementById('phone');
-    const btn = document.getElementById('btn');
-    const status = document.getElementById('status');
-    const codeBox = document.getElementById('codeBox');
-    const codeDisplay = document.getElementById('codeDisplay');
+    const phone = $('phone').value.replace(/[^0-9]/g, '');
+    if (phone.length < 9) { $('status').innerText = 'කරුණාකර නිවැරදි අංකයක් ඇතුළත් කරන්න!'; return; }
 
-    let phone = phoneInput.value.replace(/[^0-9]/g, '');
-
-    if (!phone) {
-      status.innerText = "කරුණාකර නිවැරදි දුරකථන අංකයක් ඇතුළත් කරන්න!";
-      return;
-    }
-
-    btn.disabled = true;
-    status.innerText = "Pairing Code එක සකසමින් පවතී... රැඳී සිටින්න...";
-    codeBox.style.display = "none";
+    $('btn').disabled = true;
+    $('status').className = 'status-msg';
+    $('status').innerText = 'Pairing Code එක සකසමින්... තත්පර 20ක් පමණ ගත විය හැක.';
+    $('codeBox').style.display = 'none';
+    clearInterval(poll);
 
     try {
-      const response = await fetch(`/pair?number=${phone}`);
-      const data = await response.json();
+      const key = $('key').value ? `&key=${encodeURIComponent($('key').value)}` : '';
+      const r = await fetch(`/pair?number=${phone}${key}`);
+      const data = await r.json();
 
       if (data.code) {
-        status.innerText = "Pairing Code එක සාර්ථකව ලැබුණා! WhatsApp මඟින් link කරන්න.";
-        codeDisplay.innerText = data.code;
-        codeBox.style.display = "block";
+        $('status').innerText = 'Code එක ලැබුණා! දැන් WhatsApp එකේ ඇතුළත් කරන්න.';
+        $('codeDisplay').innerText = data.code;
+        $('codeBox').style.display = 'block';
+        poll = setInterval(async () => {
+          try {
+            const s = await (await fetch('/status')).json();
+            if (s.connected) {
+              clearInterval(poll);
+              $('status').className = 'status-msg ok';
+              $('status').innerText = 'සාර්ථකව Link වුණා! Bot Online ✅';
+            }
+          } catch {}
+        }, 3000);
       } else {
-        status.innerText = data.error || "කේතය ලබා ගැනීමට නොහැකි විය. නැවත උත්සාහ කරන්න.";
+        $('status').innerText = data.error || 'නැවත උත්සාහ කරන්න.';
       }
-    } catch (err) {
-      status.innerText = "සම්බන්ධතා දෝෂයක්. සර්වර් එක චෙක් කරන්න.";
+    } catch {
+      $('status').innerText = 'සම්බන්ධතා දෝෂයක්. සර්වර් එක චෙක් කරන්න.';
     } finally {
-      btn.disabled = false;
+      $('btn').disabled = false;
     }
   }
 
   function copyCode() {
-    const code = document.getElementById('codeDisplay').innerText;
-    navigator.clipboard.writeText(code);
-    alert("Pairing Code එක copy කරගත්තා: " + code);
+    const code = $('codeDisplay').innerText;
+    navigator.clipboard?.writeText(code);
+    $('status').innerText = 'Copy කරගත්තා: ' + code;
   }
 </script>
-
 </body>
 </html>
