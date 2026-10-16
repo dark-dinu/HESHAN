@@ -19,7 +19,7 @@ const {
   Memory
 } = require("./database");
 
-const logger = pino({ level: "silent" });
+const logger = pino({ level: process.env.LOG_LEVEL || "warn" });
 const app = express();
 app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json());
@@ -113,12 +113,13 @@ function extractText(message) {
 
 function registerEvents(socket) {
   socket.ev.on("messages.upsert", async ({ messages, type }) => {
+    console.log(`📩 messages.upsert type=${type} count=${messages.length}`);
     if (type !== "notify") return;
     for (const msg of messages) {
       try {
         await handleMessage(socket, msg);
       } catch (e) {
-        console.error("Message handling error:", e);
+        console.error("Message handling error:", e && e.stack ? e.stack : e);
       }
     }
   });
@@ -133,6 +134,13 @@ async function handleMessage(socket, msg) {
   const clean = extractText(msg.message);
   if (!clean) return;
   const lower = clean.toLowerCase();
+  console.log(`💬 msg jid=${jid} fromMe=${!!msg.key.fromMe} group=${isGroup} len=${clean.length}`);
+
+  // Test command: AI නැතුව bot ජීවතුන් අතර ඉන්නවාද බලන්න
+  if (lower === ".ping") {
+    await socket.sendMessage(jid, { text: "pong 🏓 Nethu online ❤️" }, { quoted: msg });
+    return;
+  }
 
   // Commands (owner ගේ අංකයෙන් එවනවා නම් fromMe වුනත් වැඩ කරනවා)
   if (isGroup && lower === ".group on ai") {
@@ -195,7 +203,8 @@ async function startSocket({ pairNumber, onCode, onError } = {}) {
     },
     browser: Browsers.ubuntu("Chrome"),
     syncFullHistory: false,
-    markOnlineOnConnect: false
+    markOnlineOnConnect: true,
+    getMessage: async () => undefined
   });
   sock = s;
   connected = false;
