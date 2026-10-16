@@ -3,7 +3,8 @@ const {
   DisconnectReason,
   fetchLatestBaileysVersion,
   delay,
-  useMultiFileAuthState
+  useMultiFileAuthState,
+  Browsers
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const express = require("express");
@@ -17,10 +18,10 @@ const app = express();
 app.use(express.static(path.join(__dirname, "public")));
 app.use(express.json());
 
-const SESSION_DIR = path.join(__dirname, "auth_info_baileys");
-let sock = null;
+const SESSION_DIR = path.join(__dirname, "session_auth");
+let mainSock = null;
 
-// AI Chat function
+// OpenRouter AI Response Logic
 async function askNethuAI(userMessage) {
   try {
     const res = await axios.post(
@@ -43,12 +44,12 @@ async function askNethuAI(userMessage) {
     );
     return res.data.choices[0]?.message?.content?.trim();
   } catch (error) {
-    console.error("OpenRouter API Error:", error?.response?.data || error.message);
+    console.error("OpenRouter Error:", error?.response?.data || error.message);
     return "අනේ මට පොඩ්ඩක් මහන්සියි වගේ පැටියෝ.. පස්සෙ කතා කරමුද? 🥺❤️";
   }
 }
 
-// Bot listeners
+// Bot Command Handlers
 function setupBotEvents(client) {
   client.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
@@ -104,13 +105,13 @@ function setupBotEvents(client) {
       await client.sendMessage(jid, { text: aiReply }, { quoted: msg });
       await client.sendPresenceUpdate("paused", jid);
     } catch (err) {
-      console.error("Message handling error:", err);
+      console.error("Message Error:", err);
     }
   });
 }
 
-// Backup session directory to single string in MongoDB
-async function backupSession() {
+// Backup local folder to MongoDB
+async function syncSessionToMongo() {
   try {
     if (!fs.existsSync(SESSION_DIR)) return;
     const files = fs.readdirSync(SESSION_DIR);
@@ -119,18 +120,18 @@ async function backupSession() {
       sessionObj[file] = fs.readFileSync(path.join(SESSION_DIR, file), "base64");
     }
     await saveSessionToMongo(config.SESSION_ID, JSON.stringify(sessionObj));
-    console.log("Session successfully backed up to MongoDB.");
-  } catch (e) {
-    console.error("Backup error:", e);
+    console.log("Session backed up to MongoDB successfully.");
+  } catch (err) {
+    console.error("Failed to sync session:", err);
   }
 }
 
-// Restore session from MongoDB to local directory
-async function restoreSession() {
+// Restore folder from MongoDB
+async function restoreSessionFromMongo() {
   try {
-    const rawData = await getSessionFromMongo(config.SESSION_ID);
-    if (!rawData) return false;
-    const sessionObj = JSON.parse(rawData);
+    const raw = await getSessionFromMongo(config.SESSION_ID);
+    if (!raw) return false;
+    const sessionObj = JSON.parse(raw);
     if (!fs.existsSync(SESSION_DIR)) {
       fs.mkdirSync(SESSION_DIR, { recursive: true });
     }
@@ -138,62 +139,59 @@ async function restoreSession() {
       fs.writeFileSync(path.join(SESSION_DIR, file), Buffer.from(b64, "base64"));
     }
     return true;
-  } catch (e) {
-    console.error("Restore error:", e);
+  } catch (err) {
+    console.error("Failed to restore session:", err);
     return false;
   }
 }
 
-// Start WhatsApp Client
+// Start Main WhatsApp Connection
 async function startNethuBot() {
   const { state, saveCreds } = await useMultiFileAuthState(SESSION_DIR);
   const { version } = await fetchLatestBaileysVersion();
 
-  sock = makeWASocket({
+  mainSock = makeWASocket({
     version,
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
     auth: state,
-    browser: ["Chrome (Linux)", "", ""]
+    browser: Browsers.macOS("Desktop"),
+    syncFullHistory: false
   });
 
-  sock.ev.on("creds.update", async () => {
+  mainSock.ev.on("creds.update", async () => {
     await saveCreds();
-    await backupSession();
+    await syncSessionToMongo();
   });
 
-  sock.ev.on("connection.update", async (update) => {
+  mainSock.ev.on("connection.update", async (update) => {
     const { connection, lastDisconnect } = update;
 
     if (connection === "open") {
-      console.log("🌸 Nethu AI Bot Connected & Logged in successfully!");
-      await backupSession();
-      setupBotEvents(sock);
-    }
-
-    if (connection === "close") {
+      console.log("🌸 Nethu AI Bot Connected & Online!");
+      await syncSessionToMongo();
+      setupBotEvents(mainSock);
+    } else if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
       console.log(`Connection closed: ${statusCode}. Reconnecting: ${shouldReconnect}`);
       if (shouldReconnect) {
         setTimeout(startNethuBot, 3000);
-      } else {
-        fs.rmSync(SESSION_DIR, { recursive: true, force: true });
       }
     }
   });
 
-  return sock;
+  return mainSock;
 }
 
 // Web Pairing Endpoint
 app.get("/pair", async (req, res) => {
   let num = req.query.number;
-  if (!num) return res.status(400).json({ error: "අංකය අවශ්‍යයි." });
+  if (!num) return res.status(400).json({ error: "අංකය ඇතුළත් කරන්න." });
 
   num = num.replace(/[^0-9]/g, "");
 
-  // Clean old session folder if not registered
+  // Clear existing session directory to start a clean handshake
   if (fs.existsSync(SESSION_DIR)) {
     fs.rmSync(SESSION_DIR, { recursive: true, force: true });
   }
@@ -202,38 +200,38 @@ app.get("/pair", async (req, res) => {
   const { version } = await fetchLatestBaileysVersion();
 
   try {
-    sock = makeWASocket({
+    mainSock = makeWASocket({
       version,
       logger: pino({ level: "silent" }),
       printQRInTerminal: false,
       auth: state,
-      browser: ["Chrome (Linux)", "", ""]
+      browser: Browsers.macOS("Desktop")
     });
 
-    sock.ev.on("creds.update", async () => {
+    mainSock.ev.on("creds.update", async () => {
       await saveCreds();
-      await backupSession();
+      await syncSessionToMongo();
     });
 
-    sock.ev.on("connection.update", async (update) => {
+    mainSock.ev.on("connection.update", async (update) => {
       const { connection } = update;
       if (connection === "open") {
-        console.log("🌸 WhatsApp Pair Completed and Logged in!");
-        await backupSession();
-        setupBotEvents(sock);
+        console.log("🌸 Pairing complete, Bot is now ready!");
+        await syncSessionToMongo();
+        setupBotEvents(mainSock);
       }
     });
 
-    // Handshake delay for Baileys socket
-    await delay(3000);
+    // Wait 3.5 seconds to ensure WebSocket Handshake is fully established
+    await delay(3500);
 
-    const code = await sock.requestPairingCode(num);
+    const code = await mainSock.requestPairingCode(num);
     const formatted = code?.match(/.{1,4}/g)?.join("-") || code;
-    console.log(`Pairing Code Created: ${formatted}`);
+    console.log(`Pairing code issued: ${formatted}`);
     return res.json({ code: formatted });
   } catch (err) {
-    console.error("Pairing API error:", err);
-    return res.status(500).json({ error: "කේතය ලබාගැනීමට නොහැකි විය. කරුණාකර නැවත උත්සාහ කරන්න." });
+    console.error("Pairing failure:", err);
+    return res.status(500).json({ error: "කේතය ලබා ගැනීමට නොහැකි විය. නැවත උත්සාහ කරන්න." });
   }
 });
 
@@ -242,15 +240,15 @@ async function startServer() {
   await connectDB(config.MONGODB_URI);
 
   app.listen(config.PORT, () => {
-    console.log(`🌸 Nethu AI Linker is running on port ${config.PORT}`);
+    console.log(`🌸 Nethu AI Server running on port ${config.PORT}`);
   });
 
-  const hasSession = await restoreSession();
+  const hasSession = await restoreSessionFromMongo();
   if (hasSession && fs.existsSync(path.join(SESSION_DIR, "creds.json"))) {
-    console.log("Restored previous session from MongoDB. Connecting...");
+    console.log("Found saved session in MongoDB. Connecting...");
     await startNethuBot();
   } else {
-    console.log("No valid session found. Waiting for pairing code request...");
+    console.log("No session found. Open Web Site to link your device.");
   }
 }
 
