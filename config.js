@@ -1,8 +1,11 @@
-require("dotenv").config();
+Require("dotenv").config();
 
-module.exports = {
+Module.exports = {
   MONGODB_URI: process.env.MONGODB_URI || process.env.MONGO_URI || "",
-  OPENROUTER_API_KEY: process.env.OPENROUTER_API_KEY || "",
+  
+  // ඔබේ OpenRouter API Key එක මෙතැනට කෙලින්ම දාන්න (Quotes ඇතුළේ)
+  OPENROUTER_API_KEY: "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", 
+
   SESSION_ID: process.env.SESSION_ID || "nethu_session",
   PORT: process.env.PORT || 3000,
   PAIR_KEY: process.env.PAIR_KEY || "",
