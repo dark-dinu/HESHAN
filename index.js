@@ -29,6 +29,9 @@ let connected = false;    // WhatsApp open ද?
 let registered = false;   // Link වී ඇත්ද?
 let pending = null;       // pairing request එකක් පොරොත්තුවෙන්ද
 
+// බොට් විසින්ම යවන මැසේජ් හඳුනාගෙන infinite loop වැළැක්වීමට
+const sentMessages = new Set();
+
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /* ---------------- AI ---------------- */
@@ -49,10 +52,7 @@ async function remember(jid, user, assistant) {
             { role: "user", content: user },
             { role: "assistant", content: assistant }
           ],
-          $slice: -30
-        }
-      },
-      $set: { updatedAt: new Date() }
+          $slice: -30 } },$set: { updatedAt: new Date() }
     },
     { upsert: true }
   );
@@ -101,20 +101,35 @@ async function askNethuAI(jid, text) {
 
 /* ---------------- Message handling ---------------- */
 function extractText(message) {
-  const m = normalizeMessageContent(message) || {};
+  if (!message) return "";
+  const m = normalizeMessageContent(message) || message;
   return (
     m.conversation ||
     m.extendedTextMessage?.text ||
+    m.ephemeralMessage?.message?.extendedTextMessage?.text ||
+    m.ephemeralMessage?.message?.conversation ||
+    m.viewOnceMessage?.message?.imageMessage?.caption ||
+    m.viewOnceMessage?.message?.videoMessage?.caption ||
     m.imageMessage?.caption ||
     m.videoMessage?.caption ||
+    m.documentMessage?.caption ||
     ""
   ).trim();
+}
+
+async function sendSafeMessage(socket, jid, content, options = {}) {
+  const sent = await socket.sendMessage(jid, content, options);
+  if (sent?.key?.id) {
+    sentMessages.add(sent.key.id);
+    setTimeout(() => sentMessages.delete(sent.key.id), 60000);
+  }
+  return sent;
 }
 
 function registerEvents(socket) {
   socket.ev.on("messages.upsert", async ({ messages, type }) => {
     console.log(`📩 messages.upsert type=${type} count=${messages.length}`);
-    if (type !== "notify") return;
+    if (type !== "notify" && type !== "append") return;
     for (const msg of messages) {
       try {
         await handleMessage(socket, msg);
@@ -126,35 +141,62 @@ function registerEvents(socket) {
 }
 
 async function handleMessage(socket, msg) {
-  if (!msg.message) return;
+  if (!msg || !msg.key) return;
+
+  // බොට් විසින්ම යැවූ මැසේජ් එකක් නම් නොසලකා හරින්න (Infinite Loop වැළැක්වීමට)
+  if (sentMessages.has(msg.key.id)) return;
+
+  if (!msg.message) {
+    console.log(`⚠️ Message content හිස්! (Decryption අසාර්ථකයි හෝ System event එකක්): id=${msg.key.id} jid=${msg.key.remoteJid}`);
+    return;
+  }
+
+  // Protocol / Reaction / System messages නොසලකා හරින්න
+  if (
+    msg.message.protocolMessage ||
+    msg.message.reactionMessage ||
+    msg.message.senderKeyDistributionMessage
+  ) {
+    return;
+  }
+
   const jid = msg.key.remoteJid;
   if (!jid || jid === "status@broadcast" || jid.endsWith("@newsletter")) return;
 
   const isGroup = jid.endsWith("@g.us");
   const clean = extractText(msg.message);
-  if (!clean) return;
+  if (!clean) {
+    console.log(`ℹ️ Text එකක් නැති මැසේජ් එකක්: keys=${Object.keys(msg.message).join(",")}`);
+    return;
+  }
+
   const lower = clean.toLowerCase();
-  console.log(`💬 msg jid=${jid} fromMe=${!!msg.key.fromMe} group=${isGroup} len=${clean.length}`);
+  console.log(`💬 msg jid=${jid} fromMe=${!!msg.key.fromMe} group=${isGroup} len=${clean.length} text="${clean}"`);
 
   // Test command: AI නැතුව bot ජීවතුන් අතර ඉන්නවාද බලන්න
   if (lower === ".ping") {
-    await socket.sendMessage(jid, { text: "pong 🏓 Nethu online ❤️" }, { quoted: msg });
+    await sendSafeMessage(socket, jid, { text: "pong 🏓 Nethu online ❤️" }, { quoted: msg });
     return;
   }
 
   // Commands (owner ගේ අංකයෙන් එවනවා නම් fromMe වුනත් වැඩ කරනවා)
   if (isGroup && lower === ".group on ai") {
     await GroupSetting.updateOne({ groupId: jid }, { $set: { aiEnabled: true } }, { upsert: true });
-    await socket.sendMessage(jid, { text: "මෙන්න මං ආවා! දැන් මේ group එකේ මං ඉන්නවා.. 😘🙈" }, { quoted: msg });
+    await sendSafeMessage(socket, jid, { text: "මෙන්න මං ආවා! දැන් මේ group එකේ මං ඉන්නවා.. 😘🙈" }, { quoted: msg });
     return;
   }
   if (isGroup && lower === ".group off ai") {
     await GroupSetting.updateOne({ groupId: jid }, { $set: { aiEnabled: false } }, { upsert: true });
-    await socket.sendMessage(jid, { text: "හා හා මං යන්නම් එහෙනම්.. බායි! 🥺💔" }, { quoted: msg });
+    await sendSafeMessage(socket, jid, { text: "හා හා මං යන්නම් එහෙනම්.. බායි! 🥺💔" }, { quoted: msg });
     return;
   }
 
-  if (msg.key.fromMe) return;
+  // Self-chat (Message Yourself) හැර වෙනත් අයට ඔබ යවන මැසේජ් වලට බොට් රිප්ලයි කිරීම වැළැක්වීමට
+  const botNumber = socket.user?.id ? socket.user.id.split(":")[0] + "@s.whatsapp.net" : "";
+  const botLid = socket.user?.lid ? socket.user.lid.split(":")[0] + "@lid" : "";
+  const isSelfChat = jid === botNumber || (botLid && jid === botLid);
+
+  if (msg.key.fromMe && !isSelfChat) return;
 
   if (isGroup) {
     const setting = await GroupSetting.findOne({ groupId: jid }).lean();
@@ -164,7 +206,7 @@ async function handleMessage(socket, msg) {
   await socket.sendMessage(jid, { react: { text: "❤️", key: msg.key } }).catch(() => {});
   await socket.sendPresenceUpdate("composing", jid).catch(() => {});
   const reply = await askNethuAI(jid, clean);
-  await socket.sendMessage(jid, { text: reply }, { quoted: msg });
+  await sendSafeMessage(socket, jid, { text: reply }, { quoted: msg });
   await socket.sendPresenceUpdate("paused", jid).catch(() => {});
 }
 
