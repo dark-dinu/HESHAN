@@ -2,7 +2,7 @@ const {
   default: makeWASocket,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  delay
+  Browsers
 } = require("@whiskeysockets/baileys");
 const pino = require("pino");
 const express = require("express");
@@ -17,7 +17,7 @@ app.use(express.json());
 
 let sock = null;
 
-// OpenRouter AI Call
+// OpenRouter AI logic
 async function askNethuAI(text) {
   try {
     const res = await axios.post(
@@ -44,7 +44,7 @@ async function askNethuAI(text) {
   }
 }
 
-// Bot Messages & Commands
+// Bot listeners
 function registerEvents(socket) {
   socket.ev.on("messages.upsert", async ({ messages, type }) => {
     if (type !== "notify") return;
@@ -62,7 +62,6 @@ function registerEvents(socket) {
     const clean = text.trim();
     if (!clean) return;
 
-    // Group commands
     if (isGroup && clean.toLowerCase() === ".group on ai") {
       await GroupSetting.findOneAndUpdate(
         { groupId: jid },
@@ -101,12 +100,12 @@ function registerEvents(socket) {
       await socket.sendMessage(jid, { text: reply }, { quoted: msg });
       await socket.sendPresenceUpdate("paused", jid);
     } catch (e) {
-      console.error("Message Error:", e);
+      console.error("Message handling error:", e);
     }
   });
 }
 
-// Core WhatsApp Connection
+// Main permanent bot loader
 async function startNethuBot() {
   const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
   const { version } = await fetchLatestBaileysVersion();
@@ -116,7 +115,7 @@ async function startNethuBot() {
     logger: pino({ level: "silent" }),
     printQRInTerminal: false,
     auth: state,
-    browser: ["Ubuntu", "Chrome", "20.0.04"],
+    browser: Browsers.macOS("Chrome"),
     syncFullHistory: false
   });
 
@@ -126,18 +125,18 @@ async function startNethuBot() {
     const { connection, lastDisconnect } = update;
 
     if (connection === "open") {
-      console.log("🌸 Nethu AI Bot සම්පූර්ණයෙන් Auto-Connect වී සක්‍රීයයි!");
+      console.log("🌸 Nethu AI Bot Connected & Online!");
+      registerEvents(sock);
     } else if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      console.log(`සම්බන්ධතාව විසන්ධි විය (${statusCode}). නැවත සම්බන්ධ වෙමින්: ${shouldReconnect}`);
+      console.log(`Connection closed: ${statusCode}. Reconnecting: ${shouldReconnect}`);
       if (shouldReconnect) {
         setTimeout(startNethuBot, 3000);
       }
     }
   });
 
-  registerEvents(sock);
   return sock;
 }
 
@@ -148,49 +147,63 @@ app.get("/pair", async (req, res) => {
 
   num = num.replace(/[^0-9]/g, "");
 
+  const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
+
+  if (state.creds && state.creds.registered) {
+    return res.status(400).json({ error: "බොට් දැනටමත් Link වී ඇත!" });
+  }
+
   try {
-    const { state, saveCreds } = await useMongoAuthState(config.SESSION_ID);
-
-    if (state.creds && state.creds.registered) {
-      return res.status(400).json({ error: "බොට් දැනටමත් Link වී ඇත!" });
-    }
-
     const { version } = await fetchLatestBaileysVersion();
 
-    sock = makeWASocket({
+    const pairSock = makeWASocket({
       version,
       logger: pino({ level: "silent" }),
       printQRInTerminal: false,
       auth: state,
-      browser: ["Ubuntu", "Chrome", "20.0.04"]
+      browser: Browsers.macOS("Chrome")
     });
 
-    sock.ev.on("creds.update", saveCreds);
+    pairSock.ev.on("creds.update", saveCreds);
 
-    sock.ev.on("connection.update", async (update) => {
-      const { connection, lastDisconnect } = update;
-      if (connection === "open") {
-        console.log("🌸 WhatsApp Pair වීම සාර්ථකයි! Session එක MongoDB හි Save විය.");
-        registerEvents(sock);
-      } else if (connection === "close") {
-        const code = lastDisconnect?.error?.output?.statusCode;
-        if (code !== DisconnectReason.loggedOut) {
-          startNethuBot();
+    let codeSent = false;
+
+    pairSock.ev.on("connection.update", async (update) => {
+      const { connection, qr } = update;
+
+      // QR string එක හැදුණු ගමන් ඒ කියන්නේ WhatsApp Server එක connection එකට 100% Ready!
+      if (qr && !codeSent) {
+        codeSent = true;
+        try {
+          const rawCode = await pairSock.requestPairingCode(num);
+          const formatted = rawCode?.match(/.{1,4}/g)?.join("-") || rawCode;
+          console.log(`Pairing code issued: ${formatted}`);
+          return res.json({ code: formatted });
+        } catch (err) {
+          console.error("Pairing code generation failed:", err);
+          return res.status(500).json({ error: "Code එක generate කරගත නොහැකි විය." });
         }
+      }
+
+      if (connection === "open") {
+        console.log("🌸 Pairing complete! Connected to WhatsApp.");
+        sock = pairSock;
+        registerEvents(sock);
       }
     });
 
-    // WebSocket handshake එක සඳහා ප්‍රමාණවත් කාලයක් ලබා දීම
-    await delay(5000);
+    // තත්පර 12ක් ඇතුළත code එක generate නොවුනහොත් response එක timeout වීමෙන් වලක්වාලීම
+    setTimeout(() => {
+      if (!codeSent && !res.headersSent) {
+        return res.status(500).json({ error: "WhatsApp server delay. කරුණාකර නැවත ඔබන්න." });
+      }
+    }, 12000);
 
-    const rawCode = await sock.requestPairingCode(num);
-    const code = rawCode?.match(/.{1,4}/g)?.join("-") || rawCode;
-    console.log(`Pairing code එක ලබාදුන්නා: ${code}`);
-
-    return res.json({ code });
   } catch (err) {
-    console.error("Pairing failure:", err);
-    return res.status(500).json({ error: "කේතය ලබාගැනීමට නොහැකි විය. කරුණාකර තත්පර 10කින් නැවත උත්සාහ කරන්න." });
+    console.error("Endpoint crash:", err);
+    if (!res.headersSent) {
+      return res.status(500).json({ error: "Server Error!" });
+    }
   }
 });
 
@@ -199,15 +212,15 @@ async function startServer() {
   await connectDB(config.MONGODB_URI);
 
   app.listen(config.PORT, () => {
-    console.log(`🌸 Nethu AI Server එක Port ${config.PORT} හි ක්‍රියාත්මකයි.`);
+    console.log(`🌸 Server running on port ${config.PORT}`);
   });
 
   const { state } = await useMongoAuthState(config.SESSION_ID);
   if (state.creds && state.creds.registered) {
-    console.log("පවතින Session එක හමු විය. Auto Connecting...");
+    console.log("Saved MongoDB session found. Auto-connecting...");
     await startNethuBot();
   } else {
-    console.log("නව Session එකක් නොමැත. Pairing Site එක මඟින් Link කරන්න.");
+    console.log("No active session found. Waiting for pairing request via web UI...");
   }
 }
 
