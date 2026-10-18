@@ -1,5 +1,8 @@
 const axios = require('axios');
 
+// 🔴 ඔයාගේ Channel Link එක Default විදිහට Set කර ඇත:
+const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbBTkLI9Gv7bXpWEmg3D'; 
+
 /**
  * WhatsApp Channel JID එක resolve කිරීම (@newsletter format එකට)
  */
@@ -23,9 +26,6 @@ async function resolveChannelJid(sock, channelInput) {
   return input;
 }
 
-/**
- * Views / Likes format කිරීම (e.g. 591910 -> 591.9K)
- */
 function formatNumber(num) {
   if (!num) return '0';
   if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
@@ -36,45 +36,50 @@ function formatNumber(num) {
 module.exports = {
   name: 'tiktok',
   alias: ['tt', 'ctiktok', 'ctt'],
-  desc: 'Download TikTok video to chat or send to a channel',
+  desc: 'Download TikTok video to chat or auto-send to default channel',
   category: 'downloader',
   run: async ({ sock, msg, jid, args, command }) => {
     try {
-      // Command එක හඳුනා ගැනීම (ctt ද tt ද කියා)
       const messageText = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
       const cmdUsed = (command || messageText.trim().split(/\s+/)[0].slice(1)).toLowerCase();
       const isChannelCmd = cmdUsed === 'ctt' || cmdUsed === 'ctiktok';
+
+      // Reply කරපු message එකක text එකක් තිබේදැයි බැලීම
+      const quotedText = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
+                         msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text || '';
 
       const fullText = args.join(' ').trim();
       let targetJid = jid;
       let tiktokUrl = '';
 
-      // 1. Inputs වෙන් කර හඳුනා ගැනීම
       if (isChannelCmd) {
-        // Channel Command (.ctt / .ctiktok)
-        const parts = fullText.split(',');
-        if (parts.length < 2) {
-          return await sock.sendMessage(jid, { 
-            text: `⚠️ *භාවිතා කරන ආකාරය:*\n\n.ctt <Channel Link>, <TikTok Link>\n\n*උදාහරණ:*\n.ctt https://whatsapp.com/channel/xxx, https://vt.tiktok.com/xxxx/` 
-          }, { quoted: msg });
+        // Channel Command (.ctt)
+        if (fullText.includes(',')) {
+          // වෙනත් Channel එකකට දාන්න අවශ්‍ය නම්: .ctt other_channel_link, tiktok_link
+          const parts = fullText.split(',');
+          targetJid = await resolveChannelJid(sock, parts[0].trim());
+          tiktokUrl = parts.slice(1).join(',').trim();
+        } else {
+          // Default Channel: .ctt tiktok_link හෝ link එකකට reply කර .ctt ගැසීම
+          targetJid = await resolveChannelJid(sock, DEFAULT_CHANNEL);
+          tiktokUrl = fullText || quotedText;
         }
-        const channelInput = parts[0].trim();
-        tiktokUrl = parts.slice(1).join(',').trim();
-        targetJid = await resolveChannelJid(sock, channelInput);
       } else {
-        // Normal Chat Command (.tt / .tiktok)
-        if (!fullText) {
-          return await sock.sendMessage(jid, { 
-            text: `⚠️ *භාවිතා කරන ආකාරය:*\n\n.tt <TikTok Link>\n\n*උදාහරණ:*\n.tt https://vt.tiktok.com/xxxx/` 
-          }, { quoted: msg });
-        }
-        tiktokUrl = fullText;
+        // Normal Chat Command (.tt): .tt tiktok_link හෝ link එකකට reply කර .tt ගැසීම
+        tiktokUrl = fullText || quotedText;
       }
 
-      // Link Validation
-      if (!tiktokUrl.includes('tiktok.com')) {
-        return await sock.sendMessage(jid, { text: '❌ කරුණාකර නිවැරදි TikTok වීඩියෝ link එකක් ලබා දෙන්න.' }, { quoted: msg });
+      // TikTok URL එක extract කරගැනීම
+      const urlMatch = tiktokUrl.match(/https?:\/\/(?:vt\.|vm\.|www\.)?tiktok\.com\/[^\s]+/i);
+      if (!urlMatch) {
+        return await sock.sendMessage(jid, { 
+          text: isChannelCmd
+            ? `⚠️ *TikTok link එකක් හමු නොවීය!*\n\n*පහසු ක්‍රමය:* \`.ctt <TikTok Link>\`\n*නැතහොත්* TikTok link එකකට reply කර \`.ctt\` ගසන්න.`
+            : `⚠️ *TikTok link එකක් හමු නොවීය!*\n\n*භාවිතය:* \`.tt <TikTok Link>\`\n*නැතහොත්* TikTok link එකකට reply කර \`.tt\` ගසන්න.`
+        }, { quoted: msg });
       }
+
+      const validTiktokUrl = urlMatch[0];
 
       await sock.sendMessage(jid, { 
         text: isChannelCmd 
@@ -82,9 +87,9 @@ module.exports = {
           : '⏳ *HESHAN OFC:* වීඩියෝව බාගත වෙමින් පවතී...' 
       }, { quoted: msg });
 
-      // 2. Chamindu API Call
+      // Chamindu API Call
       const apiKey = 'chama_api_ec9848130d1aea209f08fb85e0b4720f';
-      const apiUrl = `https://api.chamindu.site/api/v1/tiktok?url=${encodeURIComponent(tiktokUrl)}&api_key=${apiKey}`;
+      const apiUrl = `https://api.chamindu.site/api/v1/tiktok?url=${encodeURIComponent(validTiktokUrl)}&api_key=${apiKey}`;
 
       const { data: response } = await axios.get(apiUrl, { timeout: 45000 });
 
@@ -105,7 +110,7 @@ module.exports = {
       const views = formatNumber(videoData.stats?.views);
       const likes = formatNumber(videoData.stats?.likes);
 
-      // 3. Caption Design
+      // Caption Design
       const videoCaption = 
 `> *🎬⃝✨ H E S H A N   O F C   T I K T O K*
 
@@ -118,7 +123,7 @@ module.exports = {
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`;
 
-      // 4. Video Buffer Download (Buffer එකක් ලෙස ගැනීමෙන් WhatsApp Channels වලට සහ Normal Chat වලට 100% upload වේ)
+      // Video Download Buffer
       const videoStream = await axios({
         url: videoDownloadUrl,
         method: 'GET',
@@ -129,7 +134,6 @@ module.exports = {
 
       const videoBuffer = Buffer.from(videoStream.data);
 
-      // 5. Video එක යැවීම
       if (isChannelCmd) {
         // Channel එකට යැවීම
         await sock.sendMessage(targetJid, {
@@ -138,13 +142,12 @@ module.exports = {
           mimetype: 'video/mp4'
         });
 
-        // User හට confirmation එකක්
         await sock.sendMessage(jid, { 
-          text: `✅ *සාර්ථකයි!* TikTok වීඩියෝව Channel එකට සාර්ථකව යවන ලදී.` 
+          text: `✅ *සාර්ථකයි!* TikTok වීඩියෝව Channel එකට යවන ලදී.` 
         }, { quoted: msg });
 
       } else {
-        // සාමාන්‍ය Chat එකට යැවීම
+        // Normal Chat එකට යැවීම
         await sock.sendMessage(jid, {
           video: videoBuffer,
           caption: videoCaption,
