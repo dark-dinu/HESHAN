@@ -1,17 +1,44 @@
 const axios = require('axios');
 const translate = require('@vitalets/google-translate-api');
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
 // 🔴 ඔයාගේ ElevenLabs API Key එක:
 const ELEVEN_API_KEY = 'sk_1f13e8dd2fc5f2b6f868532aa95d1df87ef42bc722c16023';
 
-// ElevenLabs Voices (කැමති voice එකක් නමින් තෝරා ගැනීමට)
+// ElevenLabs Voice IDs
 const VOICES = {
-  adam: 'pNInz6obpgDQGcFmaJgB',      // Deep Male Voice (Default)
+  adam: 'pNInz6obpgDQGcFmaJgB',      // Male Voice (Default)
   rachel: '21m00Tcm4TlvDq8ikWAM',    // Calm Female Voice
   nicole: 'piTKgcLEGmPE4e6mEKli',    // Soft Female Voice
   antoni: 'ErXwobaYiN019PkySvjV',    // Friendly Male Voice
   charlotte: 'XB0fDUnXU5powFXDhCwa'  // British Female Voice
 };
+
+// WhatsApp Standard Opus Voice Note බවට convert කිරීම
+function convertToOpus(inputPath, outputPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg(inputPath)
+      .noVideo()
+      .audioCodec('libopus')
+      .audioChannels(1)
+      .audioFrequency(48000)
+      .audioBitrate('64k')
+      .format('ogg')
+      .outputOptions([
+        '-avoid_negative_ts make_zero',
+        '-map_metadata -1'
+      ])
+      .on('end', () => resolve(outputPath))
+      .on('error', (err) => reject(err))
+      .save(outputPath);
+  });
+}
 
 module.exports = {
   name: 'tts',
@@ -19,6 +46,10 @@ module.exports = {
   desc: 'Text to speech using ElevenLabs with translation support',
   category: 'ai',
   run: async ({ sock, msg, jid, args }) => {
+    const tempDir = os.tmpdir();
+    const tempInputFile = path.join(tempDir, `tts_raw_${Date.now()}.mp3`);
+    const tempOutputFile = path.join(tempDir, `tts_vn_${Date.now()}.ogg`);
+
     try {
       const fullText = args.join(' ').trim();
       const quotedText = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
@@ -32,8 +63,8 @@ module.exports = {
                 `1️⃣ *සාමාන්‍ය TTS:* \`.tts Hello how are you\`\n` +
                 `2️⃣ *Voice තෝරා ගැනීම:* \`.tts rachel Hello there\`\n` +
                 `*(Voices: adam, rachel, nicole, antoni, charlotte)*\n\n` +
-                `3️⃣ *Google Translate කර Voice ගැනීම:* \`.tts --en කොහොමද යාලුවේ\`\n` +
-                `*(ඕනෑම භාෂාවක text එකක් translate කර voice note එකක් ලබා දේ)*`
+                `3️⃣ *Google Translate කර Voice ගැනීම:* \`.tts --en මොකද කරන්නේ\`\n` +
+                `*(ඕනෑම භාෂාවකින් translate කර voice note ලබා දේ)*`
         }, { quoted: msg });
       }
 
@@ -42,7 +73,7 @@ module.exports = {
       let selectedVoice = VOICES.adam;
       let textToConvert = inputText;
 
-      // 1. Google Translate Flag පරීක්ෂාව (e.g. .tts --en හෝ .tts --si)
+      // 1. Google Translate Flag පරීක්ෂාව
       const langMatch = textToConvert.match(/^--([a-z]{2})\s+(.+)/i);
       if (langMatch) {
         const targetLang = langMatch[1].toLowerCase();
@@ -56,7 +87,7 @@ module.exports = {
         }
       }
 
-      // 2. Custom Voice පරීක්ෂාව (e.g. .tts rachel hello)
+      // 2. Custom Voice පරීක්ෂාව
       const firstWord = textToConvert.split(/\s+/)[0].toLowerCase();
       if (VOICES[firstWord]) {
         selectedVoice = VOICES[firstWord];
@@ -64,7 +95,7 @@ module.exports = {
       }
 
       if (!textToConvert) {
-        return await sock.sendMessage(jid, { text: '❌ කරුණාකර කතා කිරීමට අවශ්‍ය වචන ඇතුළත් කරන්න.' }, { quoted: msg });
+        return await sock.sendMessage(jid, { text: '❌ කරුණාකර වචන ඇතුළත් කරන්න.' }, { quoted: msg });
       }
 
       // 3. ElevenLabs API Call
@@ -80,7 +111,7 @@ module.exports = {
         },
         data: {
           text: textToConvert,
-          model_id: 'eleven_multilingual_v2', // සිංහල සහ ඉංග්‍රීසි ඇතුළු භාෂා රැසකට සහය දක්වයි
+          model_id: 'eleven_multilingual_v2',
           voice_settings: {
             stability: 0.5,
             similarity_boost: 0.75
@@ -90,7 +121,13 @@ module.exports = {
         timeout: 60000
       });
 
-      const audioBuffer = Buffer.from(response.data);
+      // Local MP3 file එකකට save කිරීම
+      fs.writeFileSync(tempInputFile, Buffer.from(response.data));
+
+      // WhatsApp Standard Opus Voice Note බවට convert කිරීම
+      await convertToOpus(tempInputFile, tempOutputFile);
+
+      const audioBuffer = fs.readFileSync(tempOutputFile);
 
       // Waveform bars සකස් කිරීම
       const dummyWaveform = new Uint8Array(64);
@@ -98,10 +135,10 @@ module.exports = {
         dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
       }
 
-      // 4. Voice Note (PTT) එකක් විදිහට Play වෙන්න යැවීම
+      // 4. WhatsApp වෙත Voice Note එකක් (PTT) ලෙස යැවීම
       await sock.sendMessage(jid, {
         audio: audioBuffer,
-        mimetype: 'audio/mp4',
+        mimetype: 'audio/ogg; codecs=opus',
         ptt: true,
         waveform: dummyWaveform
       }, { quoted: msg });
@@ -113,6 +150,10 @@ module.exports = {
       await sock.sendMessage(jid, { 
         text: `❌ දෝෂයක්: ${error?.response?.status === 401 ? 'API Key එක වැරදියි හෝ Limit ඉවරයි.' : error.message}` 
       }, { quoted: msg });
+    } finally {
+      // Temp files ඉවත් කිරීම
+      if (fs.existsSync(tempInputFile)) fs.unlinkSync(tempInputFile);
+      if (fs.existsSync(tempOutputFile)) fs.unlinkSync(tempOutputFile);
     }
   }
 };
