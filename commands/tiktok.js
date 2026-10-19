@@ -1,7 +1,8 @@
 const axios = require('axios');
 
-// Default WhatsApp Channel Link
+// Default WhatsApp Channel Links
 const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbBTkLI9Gv7bXpWEmg3D';
+const CHANNEL_2 = 'https://whatsapp.com/channel/0029Vb9GVpd0wajsDAReUJ2k';
 
 /**
  * .csong එකේ භාවිත කළ 100% Verified Channel Resolver Logic එක
@@ -35,14 +36,15 @@ function formatNumber(num) {
 
 module.exports = {
   name: 'tiktok',
-  alias: ['tt', 'ctiktok', 'ctt'],
+  alias: ['tt', 'ctiktok', 'ctt', 'ctt1'],
   desc: 'Download TikTok video to chat or send to default channel',
   category: 'downloader',
   run: async ({ sock, msg, jid, args, command }) => {
     try {
       const messageText = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
       const cmdUsed = (command || messageText.trim().split(/\s+/)[0].slice(1)).toLowerCase();
-      const isChannelCmd = cmdUsed === 'ctt' || cmdUsed === 'ctiktok';
+      const isChannelCmd = cmdUsed === 'ctt' || cmdUsed === 'ctiktok' || cmdUsed === 'ctt1';
+      const isChannel2 = cmdUsed === 'ctt1';
 
       // Reply message check
       const quotedText = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
@@ -59,7 +61,9 @@ module.exports = {
           destinationJid = await resolveChannelJid(sock, parts[0].trim());
           tiktokUrl = parts.slice(1).join(',').trim();
         } else {
-          destinationJid = await resolveChannelJid(sock, DEFAULT_CHANNEL);
+          // .ctt1 නම් CHANNEL_2, නැතහොත් DEFAULT_CHANNEL
+          const targetChannel = isChannel2 ? CHANNEL_2 : DEFAULT_CHANNEL;
+          destinationJid = await resolveChannelJid(sock, targetChannel);
           tiktokUrl = fullText || quotedText;
         }
       } else {
@@ -72,7 +76,7 @@ module.exports = {
       if (!urlMatch) {
         return await sock.sendMessage(jid, { 
           text: isChannelCmd
-            ? `⚠️ *No TikTok link found!*\n\n*Usage:* \`.ctt <TikTok Link>\`\n*Or* reply to a link with \`.ctt\``
+            ? `⚠️ *No TikTok link found!*\n\n*Usage:* \`.${cmdUsed} <TikTok Link>\`\n*Or* reply to a link with \`.${cmdUsed}\``
             : `⚠️ *No TikTok link found!*\n\n*Usage:* \`.tt <TikTok Link>\`\n*Or* reply to a link with \`.tt\``
         }, { quoted: msg });
       }
@@ -123,10 +127,17 @@ module.exports = {
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`;
 
-      // Channel Caption (.ctt)
-      const channelCaption = cleanTitle 
-        ? `${cleanTitle}\n\n> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`
-        : `> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`;
+      // Channel Caption (.ctt / .ctt1)
+      let channelCaption = '';
+      if (isChannel2) {
+        // .ctt1: යටින් කිසිම නමක් නැතිව title එක පමණි
+        channelCaption = cleanTitle || rawTitle || '';
+      } else {
+        // .ctt: පැරණි විදිහටම නම සහිතව
+        channelCaption = cleanTitle 
+          ? `${cleanTitle}\n\n> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`
+          : `> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`;
+      }
 
       // Direct Stream Buffer Download
       const videoStream = await axios({
