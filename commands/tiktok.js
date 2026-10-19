@@ -1,10 +1,10 @@
 const axios = require('axios');
 
 // Default WhatsApp Channel Link
-const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbBTkLI9Gv7bXpWEmg3D'; 
+const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbBTkLI9Gv7bXpWEmg3D';
 
 /**
- * Resolve WhatsApp Channel JID (@newsletter format)
+ * .csong එකේ භාවිත කළ 100% Verified Channel Resolver Logic එක
  */
 async function resolveChannelJid(sock, channelInput) {
   let input = channelInput.trim();
@@ -18,7 +18,7 @@ async function resolveChannelJid(sock, channelInput) {
         const meta = await sock.newsletterMetadata('invite', inviteCode);
         if (meta?.id) return meta.id;
       } catch (e) {
-        console.error('Newsletter metadata error:', e);
+        console.error('Newsletter meta error:', e);
       }
     }
     return `${inviteCode}@newsletter`;
@@ -36,7 +36,7 @@ function formatNumber(num) {
 module.exports = {
   name: 'tiktok',
   alias: ['tt', 'ctiktok', 'ctt'],
-  desc: 'Download TikTok video to chat or auto-send to default channel',
+  desc: 'Download TikTok video to chat or send to default channel',
   category: 'downloader',
   run: async ({ sock, msg, jid, args, command }) => {
     try {
@@ -44,36 +44,36 @@ module.exports = {
       const cmdUsed = (command || messageText.trim().split(/\s+/)[0].slice(1)).toLowerCase();
       const isChannelCmd = cmdUsed === 'ctt' || cmdUsed === 'ctiktok';
 
-      // Check for replied message text
+      // Reply message check
       const quotedText = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
                          msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text || '';
 
       const fullText = args.join(' ').trim();
-      let targetJid = jid;
+      let destinationJid = jid;
       let tiktokUrl = '';
 
       if (isChannelCmd) {
-        // Channel Command (.ctt)
+        // Channel Command
         if (fullText.includes(',')) {
           const parts = fullText.split(',');
-          targetJid = await resolveChannelJid(sock, parts[0].trim());
+          destinationJid = await resolveChannelJid(sock, parts[0].trim());
           tiktokUrl = parts.slice(1).join(',').trim();
         } else {
-          targetJid = await resolveChannelJid(sock, DEFAULT_CHANNEL);
+          destinationJid = await resolveChannelJid(sock, DEFAULT_CHANNEL);
           tiktokUrl = fullText || quotedText;
         }
       } else {
-        // Normal Chat Command (.tt)
+        // Normal Chat Command
         tiktokUrl = fullText || quotedText;
       }
 
-      // Extract TikTok URL
+      // Extract TikTok URL cleanly
       const urlMatch = tiktokUrl.match(/https?:\/\/(?:vt\.|vm\.|www\.)?tiktok\.com\/[^\s]+/i);
       if (!urlMatch) {
         return await sock.sendMessage(jid, { 
           text: isChannelCmd
-            ? `⚠️ *No TikTok link found!*\n\n*Usage:* \`.ctt <TikTok Link>\`\n*Or* reply to a TikTok link with \`.ctt\``
-            : `⚠️ *No TikTok link found!*\n\n*Usage:* \`.tt <TikTok Link>\`\n*Or* reply to a TikTok link with \`.tt\``
+            ? `⚠️ *No TikTok link found!*\n\n*Usage:* \`.ctt <TikTok Link>\`\n*Or* reply to a link with \`.ctt\``
+            : `⚠️ *No TikTok link found!*\n\n*Usage:* \`.tt <TikTok Link>\`\n*Or* reply to a link with \`.tt\``
         }, { quoted: msg });
       }
 
@@ -85,14 +85,14 @@ module.exports = {
           : '⏳ *HESHAN OFC:* Downloading TikTok video...' 
       }, { quoted: msg });
 
-      // Chamindu API Call
+      // Chamindu API
       const apiKey = 'chama_api_ec9848130d1aea209f08fb85e0b4720f';
       const apiUrl = `https://api.chamindu.site/api/v1/tiktok?url=${encodeURIComponent(validTiktokUrl)}&api_key=${apiKey}`;
 
       const { data: response } = await axios.get(apiUrl, { timeout: 45000 });
 
       if (!response?.status || !response?.data) {
-        return await sock.sendMessage(jid, { text: '❌ Failed to fetch video. Please verify the URL.' }, { quoted: msg });
+        return await sock.sendMessage(jid, { text: '❌ Failed to fetch video. Please check the URL.' }, { quoted: msg });
       }
 
       const videoData = response.data;
@@ -103,7 +103,6 @@ module.exports = {
       }
 
       const rawTitle = videoData.title || '';
-      // Strip hashtags (#...) and mentions (@...)
       const cleanTitle = rawTitle.replace(/#\S+/g, '').replace(/@\S+/g, '').replace(/\s+/g, ' ').trim();
 
       const author = videoData.author?.nickname || videoData.author?.unique_id || 'TikTok User';
@@ -111,7 +110,7 @@ module.exports = {
       const views = formatNumber(videoData.stats?.views);
       const likes = formatNumber(videoData.stats?.likes);
 
-      // Normal Chat Caption Design
+      // Normal Chat Caption
       const normalChatCaption = 
 `> *🎬⃝✨ H E S H A N   O F C   T I K T O K*
 
@@ -124,12 +123,12 @@ module.exports = {
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`;
 
-      // Clean Channel Caption (.ctt)
+      // Channel Caption (.ctt)
       const channelCaption = cleanTitle 
         ? `${cleanTitle}\n\n> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`
         : `> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`;
 
-      // Download Video Buffer
+      // Direct Stream Buffer Download
       const videoStream = await axios({
         url: videoDownloadUrl,
         method: 'GET',
@@ -142,7 +141,7 @@ module.exports = {
 
       if (isChannelCmd) {
         // Send to Channel
-        await sock.sendMessage(targetChannelJid, {
+        await sock.sendMessage(destinationJid, {
           video: videoBuffer,
           caption: channelCaption,
           mimetype: 'video/mp4'
