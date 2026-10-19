@@ -1,10 +1,10 @@
 const axios = require('axios');
 
-// 🔴 ඔයාගේ Channel Link එක Default විදිහට Set කර ඇත:
+// Default WhatsApp Channel Link
 const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbBTkLI9Gv7bXpWEmg3D'; 
 
 /**
- * WhatsApp Channel JID එක resolve කිරීම (@newsletter format එකට)
+ * Resolve WhatsApp Channel JID (@newsletter format)
  */
 async function resolveChannelJid(sock, channelInput) {
   let input = channelInput.trim();
@@ -44,7 +44,7 @@ module.exports = {
       const cmdUsed = (command || messageText.trim().split(/\s+/)[0].slice(1)).toLowerCase();
       const isChannelCmd = cmdUsed === 'ctt' || cmdUsed === 'ctiktok';
 
-      // Reply කරපු message එකක text එකක් තිබේදැයි බැලීම
+      // Check for replied message text
       const quotedText = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
                          msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text || '';
 
@@ -55,27 +55,25 @@ module.exports = {
       if (isChannelCmd) {
         // Channel Command (.ctt)
         if (fullText.includes(',')) {
-          // වෙනත් Channel එකකට දාන්න අවශ්‍ය නම්: .ctt other_channel_link, tiktok_link
           const parts = fullText.split(',');
           targetJid = await resolveChannelJid(sock, parts[0].trim());
           tiktokUrl = parts.slice(1).join(',').trim();
         } else {
-          // Default Channel: .ctt tiktok_link හෝ link එකකට reply කර .ctt ගැසීම
           targetJid = await resolveChannelJid(sock, DEFAULT_CHANNEL);
           tiktokUrl = fullText || quotedText;
         }
       } else {
-        // Normal Chat Command (.tt): .tt tiktok_link හෝ link එකකට reply කර .tt ගැසීම
+        // Normal Chat Command (.tt)
         tiktokUrl = fullText || quotedText;
       }
 
-      // TikTok URL එක extract කරගැනීම
+      // Extract TikTok URL
       const urlMatch = tiktokUrl.match(/https?:\/\/(?:vt\.|vm\.|www\.)?tiktok\.com\/[^\s]+/i);
       if (!urlMatch) {
         return await sock.sendMessage(jid, { 
           text: isChannelCmd
-            ? `⚠️ *TikTok link එකක් හමු නොවීය!*\n\n*පහසු ක්‍රමය:* \`.ctt <TikTok Link>\`\n*නැතහොත්* TikTok link එකකට reply කර \`.ctt\` ගසන්න.`
-            : `⚠️ *TikTok link එකක් හමු නොවීය!*\n\n*භාවිතය:* \`.tt <TikTok Link>\`\n*නැතහොත්* TikTok link එකකට reply කර \`.tt\` ගසන්න.`
+            ? `⚠️ *No TikTok link found!*\n\n*Usage:* \`.ctt <TikTok Link>\`\n*Or* reply to a TikTok link with \`.ctt\``
+            : `⚠️ *No TikTok link found!*\n\n*Usage:* \`.tt <TikTok Link>\`\n*Or* reply to a TikTok link with \`.tt\``
         }, { quoted: msg });
       }
 
@@ -83,8 +81,8 @@ module.exports = {
 
       await sock.sendMessage(jid, { 
         text: isChannelCmd 
-          ? '⏳ *HESHAN OFC:* වීඩියෝව Channel එකට සකසමින් පවතී...' 
-          : '⏳ *HESHAN OFC:* වීඩියෝව බාගත වෙමින් පවතී...' 
+          ? '⏳ *HESHAN OFC:* Processing TikTok video for channel...' 
+          : '⏳ *HESHAN OFC:* Downloading TikTok video...' 
       }, { quoted: msg });
 
       // Chamindu API Call
@@ -94,27 +92,30 @@ module.exports = {
       const { data: response } = await axios.get(apiUrl, { timeout: 45000 });
 
       if (!response?.status || !response?.data) {
-        return await sock.sendMessage(jid, { text: '❌ වීඩියෝව ලබා ගැනීමට නොහැකි විය. Link එක නිවැරදිදැයි බලන්න.' }, { quoted: msg });
+        return await sock.sendMessage(jid, { text: '❌ Failed to fetch video. Please verify the URL.' }, { quoted: msg });
       }
 
       const videoData = response.data;
       const videoDownloadUrl = videoData.downloads?.no_watermark_hd || videoData.downloads?.no_watermark || videoData.downloads?.no_watermark_sd;
 
       if (!videoDownloadUrl) {
-        return await sock.sendMessage(jid, { text: '❌ Watermark රහිත වීඩියෝ link එකක් හමු නොවීය.' }, { quoted: msg });
+        return await sock.sendMessage(jid, { text: '❌ No watermark-free video link was found.' }, { quoted: msg });
       }
 
-      const title = videoData.title || 'TikTok Video';
+      const rawTitle = videoData.title || '';
+      // Strip hashtags (#...) and mentions (@...)
+      const cleanTitle = rawTitle.replace(/#\S+/g, '').replace(/@\S+/g, '').replace(/\s+/g, ' ').trim();
+
       const author = videoData.author?.nickname || videoData.author?.unique_id || 'TikTok User';
       const duration = videoData.duration ? `${videoData.duration}s` : 'N/A';
       const views = formatNumber(videoData.stats?.views);
       const likes = formatNumber(videoData.stats?.likes);
 
-      // Caption Design
-      const videoCaption = 
+      // Normal Chat Caption Design
+      const normalChatCaption = 
 `> *🎬⃝✨ H E S H A N   O F C   T I K T O K*
 
-*❖ ᴛɪᴛʟᴇ :* ${title}
+*❖ ᴛɪᴛʟᴇ :* ${cleanTitle || rawTitle || 'TikTok Video'}
 *❖ ᴄʀᴇᴀᴛᴏʀ :* @${author}
 *❖ ᴅᴜʀᴀᴛɪᴏɴ :* ${duration}
 *❖ ᴠɪᴇᴡs :* ${views} • *ʟɪᴋᴇs :* ${likes}
@@ -123,7 +124,12 @@ module.exports = {
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`;
 
-      // Video Download Buffer
+      // Clean Channel Caption (.ctt)
+      const channelCaption = cleanTitle 
+        ? `${cleanTitle}\n\n> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`
+        : `> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`;
+
+      // Download Video Buffer
       const videoStream = await axios({
         url: videoDownloadUrl,
         method: 'GET',
@@ -135,29 +141,29 @@ module.exports = {
       const videoBuffer = Buffer.from(videoStream.data);
 
       if (isChannelCmd) {
-        // Channel එකට යැවීම
-        await sock.sendMessage(targetJid, {
+        // Send to Channel
+        await sock.sendMessage(targetChannelJid, {
           video: videoBuffer,
-          caption: videoCaption,
+          caption: channelCaption,
           mimetype: 'video/mp4'
         });
 
         await sock.sendMessage(jid, { 
-          text: `✅ *සාර්ථකයි!* TikTok වීඩියෝව Channel එකට යවන ලදී.` 
+          text: `✅ *Success!* TikTok video uploaded to the channel.` 
         }, { quoted: msg });
 
       } else {
-        // Normal Chat එකට යැවීම
+        // Send to Normal Chat
         await sock.sendMessage(jid, {
           video: videoBuffer,
-          caption: videoCaption,
+          caption: normalChatCaption,
           mimetype: 'video/mp4'
         }, { quoted: msg });
       }
 
     } catch (error) {
       console.error('TikTok Command Error:', error);
-      await sock.sendMessage(jid, { text: `❌ දෝෂයක් සිදු විය: ${error.message}` }, { quoted: msg });
+      await sock.sendMessage(jid, { text: `❌ An error occurred: ${error.message}` }, { quoted: msg });
     }
   }
 };
