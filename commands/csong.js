@@ -8,7 +8,10 @@ const os = require('os');
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-// Audio Duration එක ගන්න Helper function එක
+// Default WhatsApp Channel Link
+const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T';
+
+// Audio Duration Helper function
 function getDuration(filePath) {
   return new Promise((resolve) => {
     ffmpeg.ffprobe(filePath, (err, metadata) => {
@@ -18,7 +21,7 @@ function getDuration(filePath) {
   });
 }
 
-// 100% WhatsApp Channel PTT Standard Opus එකකට convert කිරීම
+// 100% WhatsApp Channel PTT Standard Opus conversion
 function convertToOpus(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
@@ -64,19 +67,34 @@ module.exports = {
   desc: 'Send YouTube song as card and playable voice note to a channel',
   category: 'music',
   run: async ({ sock, msg, jid, args }) => {
-    const fullText = args.join(' ');
-    const parts = fullText.split(',');
+    const fullText = args.join(' ').trim();
+    const quotedText = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
+                       msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text || '';
 
-    if (parts.length < 2) {
+    const input = fullText || quotedText;
+
+    if (!input) {
       return await sock.sendMessage(jid, { 
-        text: `⚠️ *භාවිතා කරන ආකාරය:*\n\n.csong <Channel Link>, <Song Name හෝ YouTube Link>` 
+        text: `⚠️ *How to use:*\n\n` +
+              `1️⃣ *Default Channel:* \`.csong <Song Name or YouTube Link>\`\n` +
+              `2️⃣ *Custom Channel:* \`.csong <Channel Link>, <Song Name or YouTube Link>\`\n\n` +
+              `*Examples:*\n` +
+              `• \`.csong Ma Diha\`\n` +
+              `• \`.csong https://whatsapp.com/channel/xxx, Ma Diha\`` 
       }, { quoted: msg });
     }
 
-    const channelInput = parts[0].trim();
-    const songQuery = parts.slice(1).join(',').trim();
+    let channelInput = DEFAULT_CHANNEL;
+    let songQuery = input;
 
-    await sock.sendMessage(jid, { text: '⏳ *HESHAN OFC:* Voice note එක Channel එකට සකසමින් පවතී...' }, { quoted: msg });
+    // Check if custom channel link is provided with comma
+    if (input.includes(',')) {
+      const parts = input.split(',');
+      channelInput = parts[0].trim();
+      songQuery = parts.slice(1).join(',').trim();
+    }
+
+    await sock.sendMessage(jid, { text: '⏳ *HESHAN OFC:* Processing song card & voice note for channel...' }, { quoted: msg });
 
     const tempDir = os.tmpdir();
     const tempInputFile = path.join(tempDir, `raw_${Date.now()}.mp4`);
@@ -94,7 +112,7 @@ module.exports = {
       if (!isYoutubeUrl) {
         const searchResult = await yts(songQuery);
         if (!searchResult?.videos?.length) {
-          return await sock.sendMessage(jid, { text: '❌ ගීතය හමු නොවීය.' }, { quoted: msg });
+          return await sock.sendMessage(jid, { text: '❌ Song not found on YouTube.' }, { quoted: msg });
         }
         targetYoutubeUrl = searchResult.videos[0].url;
         searchedTitle = searchResult.videos[0].title;
@@ -112,10 +130,10 @@ module.exports = {
       const duration = searchedDuration;
 
       if (!downloadUrl) {
-        return await sock.sendMessage(jid, { text: '❌ Download Link එක ලබා ගැනීමට නොහැකි විය.' }, { quoted: msg });
+        return await sock.sendMessage(jid, { text: '❌ Failed to fetch download link from API.' }, { quoted: msg });
       }
 
-      // 1. Song Card Image එක යැවීම (නව Design එක)
+      // 1. Send Song Card Image
       const songCardCaption = 
 `> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
 
@@ -133,7 +151,7 @@ module.exports = {
         caption: songCardCaption
       });
 
-      // 2. Audio/Video එක local file එකකට download කරගැනීම
+      // 2. Download Media File
       const fileResponse = await axios({
         url: downloadUrl,
         method: 'GET',
@@ -144,13 +162,13 @@ module.exports = {
 
       fs.writeFileSync(tempInputFile, Buffer.from(fileResponse.data));
 
-      // 3. Audio එක Opus (Voice Note) බවට FFmpeg හරහා convert කිරීම
+      // 3. Convert to WhatsApp Opus PTT
       await convertToOpus(tempInputFile, tempOutputFile);
 
-      // 4. Duration එක ගණනය කරගැනීම
+      // 4. Calculate Duration
       const audioSeconds = await getDuration(tempOutputFile);
 
-      // 5. Channel එකේ Voice waveform එක පෙන්වීමට අවශ්‍ය fake waveform bytes හැදීම
+      // 5. Generate Waveform Bars
       const dummyWaveform = new Uint8Array(64);
       for (let i = 0; i < 64; i++) {
         dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
@@ -158,7 +176,7 @@ module.exports = {
 
       const audioBuffer = fs.readFileSync(tempOutputFile);
 
-      // 6. WhatsApp Channel එකට Voice Note එක යැවීම
+      // 6. Send Voice Note to Channel
       await sock.sendMessage(targetChannelJid, {
         audio: audioBuffer,
         mimetype: 'audio/ogg; codecs=opus',
@@ -167,11 +185,13 @@ module.exports = {
         waveform: dummyWaveform
       });
 
-      await sock.sendMessage(jid, { text: `✅ *සාර්ථකයි!* Song Card එක සහ Voice note එක Channel එකට යවන ලදී.` }, { quoted: msg });
+      await sock.sendMessage(jid, { 
+        text: `✅ *Success!* Song card and voice note have been uploaded to the channel.` 
+      }, { quoted: msg });
 
     } catch (error) {
       console.error('Csong Error:', error);
-      await sock.sendMessage(jid, { text: `❌ Voice note එක යැවීමේදී දෝෂයක්: ${error.message}` }, { quoted: msg });
+      await sock.sendMessage(jid, { text: `❌ An error occurred: ${error.message}` }, { quoted: msg });
     } finally {
       if (fs.existsSync(tempInputFile)) fs.unlinkSync(tempInputFile);
       if (fs.existsSync(tempOutputFile)) fs.unlinkSync(tempOutputFile);
