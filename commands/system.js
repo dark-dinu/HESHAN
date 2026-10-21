@@ -21,7 +21,7 @@ function formatBytes(bytes) {
 
 module.exports = {
   name: 'system',
-  alias: ['status', 'ping', 'botstatus'],
+  alias: ['status', 'runtime', 'botstatus'],
   desc: 'View bot system status, runtime, and ping',
   category: 'main',
   run: async ({ sock, msg, jid }) => {
