@@ -1,21 +1,23 @@
 module.exports = {
   name: 'ping',
   alias: ['p', 'speed'],
-  desc: 'Instant speed check',
+  desc: 'Instant real speed check with reaction',
   category: 'general',
   run: async ({ sock, msg, jid }) => {
     try {
-      // 1. Real Latency එක ගණනය කිරීම
-      const msgTime = msg.messageTimestamp ? Number(msg.messageTimestamp) * 1000 : Date.now();
-      const latency = Math.max(1, Date.now() - msgTime);
+      const startTime = Date.now();
 
-      // 2. React එක (⚡) සහ Message එක එකවර ක්‍රියාත්මක කිරීම
-      await Promise.all([
-        sock.sendMessage(jid, { react: { text: '⚡', key: msg.key } }),
-        sock.sendMessage(jid, { 
-          text: `𝐇𝐄𝐒𝐇𝐀𝐍 𝐎𝐅𝐂 🔥\n      > \`\`\`Pong ${latency}ms 🚀\`\`\`` 
-        }, { quoted: msg })
-      ]);
+      // 1. Message එක ක්ෂණිකව යවා round-trip latency එක ගණනය කිරීම
+      const sentMsg = await sock.sendMessage(jid, { 
+        text: `*𝐏𝐨𝐧𝐠 ${Date.now() - startTime} 𝐦𝐬 📍*` 
+      }, { quoted: msg });
+
+      // 2. ආපු සැනින් එම message එකටම ✔️ React එක වැටීම
+      if (sentMsg?.key) {
+        await sock.sendMessage(jid, { 
+          react: { text: '✔️', key: sentMsg.key } 
+        });
+      }
 
     } catch (error) {
       console.error('Ping error:', error);
