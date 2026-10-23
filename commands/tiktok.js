@@ -5,7 +5,7 @@ const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbBTkLI9Gv7bXpWEmg3D';
 const CHANNEL_2 = 'https://whatsapp.com/channel/0029Vb9GVpd0wajsDAReUJ2k';
 
 /**
- * WhatsApp Channel JID Resolver (@newsletter format)
+ * WhatsApp Channel JID Resolver
  */
 async function resolveChannelJid(sock, channelInput) {
   let input = channelInput.trim();
@@ -35,44 +35,62 @@ function formatNumber(num) {
 }
 
 /**
- * කිසිම API Key එකක් නැති Direct TikTok Web Extractor (No Quota / No Limits)
+ * vt.tiktok.com හෝ vm.tiktok.com short links සම්පූර්ණ URL එක බවට පත් කිරීම
  */
-async function getTikTokDirect(url) {
-  // Method 1: Direct Web Engine Scraping
+async function expandUrl(shortUrl) {
   try {
-    const res = await axios.post(
-      'https://www.tikwm.com/api/',
-      new URLSearchParams({ url: url, count: 12, cursor: 0, web: 1, hd: 1 }),
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        },
-        timeout: 20000
+    const res = await axios.get(shortUrl, {
+      maxRedirects: 5,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
       }
-    );
+    });
+    return res.request?.res?.responseUrl || res.config?.url || shortUrl;
+  } catch (err) {
+    if (err.response?.headers?.location) {
+      return err.response.headers.location;
+    }
+    return shortUrl;
+  }
+}
+
+/**
+ * 100% Free Multi-Engine Direct Scraper
+ */
+async function getTikTokDirect(inputUrl) {
+  // Short URL එකක් නම් expand කිරීම
+  const realUrl = await expandUrl(inputUrl);
+
+  // Engine 1: TikWM Web API
+  try {
+    const res = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(realUrl)}&hd=1`, {
+      timeout: 20000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+      }
+    });
 
     if (res?.data?.code === 0 && res?.data?.data) {
-      const data = res.data.data;
-      const dl = data.hdplay || data.play || data.wmplay;
-      const finalDownloadUrl = dl.startsWith('http') ? dl : `https://www.tikwm.com${dl}`;
+      const d = res.data.data;
+      const dl = d.hdplay || d.play || d.wmplay;
+      const downloadUrl = dl.startsWith('http') ? dl : `https://www.tikwm.com${dl}`;
 
       return {
-        downloadUrl: finalDownloadUrl,
-        title: data.title || '',
-        author: data.author?.nickname || data.author?.unique_id || 'TikTok User',
-        duration: data.duration ? `${data.duration}s` : 'N/A',
-        views: formatNumber(data.play_count),
-        likes: formatNumber(data.digg_count)
+        downloadUrl,
+        title: d.title || '',
+        author: d.author?.nickname || d.author?.unique_id || 'TikTok User',
+        duration: d.duration ? `${d.duration}s` : 'N/A',
+        views: formatNumber(d.play_count),
+        likes: formatNumber(d.digg_count)
       };
     }
-  } catch (err) {
-    console.warn('Engine 1 failed, trying Engine 2...');
+  } catch (e) {
+    console.warn('TikWM failed, trying Engine 2...');
   }
 
-  // Method 2: Public CDN Direct Resolver
+  // Engine 2: Tiklydown Public API
   try {
-    const res = await axios.get(`https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(url)}`, {
+    const res = await axios.get(`https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(realUrl)}`, {
       timeout: 20000
     });
     if (res?.data?.video?.noWatermark) {
@@ -85,8 +103,27 @@ async function getTikTokDirect(url) {
         likes: 'N/A'
       };
     }
-  } catch (err) {
-    console.error('Direct download failed:', err.message);
+  } catch (e) {
+    console.warn('Tiklydown failed, trying Engine 3...');
+  }
+
+  // Engine 3: LoLHuman Public Downloader
+  try {
+    const res = await axios.get(`https://api.lolhuman.xyz/api/tiktok?apikey=trial&url=${encodeURIComponent(realUrl)}`, {
+      timeout: 20000
+    });
+    if (res?.data?.result?.link) {
+      return {
+        downloadUrl: res.data.result.link,
+        title: res.data.result.title || '',
+        author: res.data.result.author || 'TikTok User',
+        duration: 'N/A',
+        views: 'N/A',
+        likes: 'N/A'
+      };
+    }
+  } catch (e) {
+    console.error('All engines failed:', e.message);
   }
 
   return null;
@@ -125,7 +162,7 @@ module.exports = {
         tiktokUrl = fullText || quotedText;
       }
 
-      // Extract Clean Link
+      // Link extract කර ගැනීම
       const urlMatch = tiktokUrl.match(/https?:\/\/(?:vt\.|vm\.|www\.)?tiktok\.com\/[^\s]+/i);
       if (!urlMatch) {
         return await sock.sendMessage(jid, { 
@@ -143,7 +180,7 @@ module.exports = {
           : '⏳ *HESHAN OFC:* Downloading TikTok video...' 
       }, { quoted: msg });
 
-      // Direct Extraction (No API Keys needed)
+      // Direct Scraper Call
       const videoResult = await getTikTokDirect(validTiktokUrl);
 
       if (!videoResult || !videoResult.downloadUrl) {
@@ -181,7 +218,7 @@ module.exports = {
           : `> *𝄞𝄢𝐑𝐚ප විතරමයි || 🎧🇱🇰*`;
       }
 
-      // Download buffer directly
+      // Download Stream Buffer
       const videoStream = await axios({
         url: videoResult.downloadUrl,
         method: 'GET',
