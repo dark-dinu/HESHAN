@@ -62,37 +62,24 @@ async function resolveChannelJid(sock, channelInput) {
   return input;
 }
 
-/**
- * Chamindu YouTube Download Link Resolver
- */
 async function fetchYouTubeDownload(targetYoutubeUrl) {
-  // Method 1: YouTube Download API (MP3 Audio direct)
   try {
     const directUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=128k&format=mp3&api_key=${CHAMA_API_KEY}`;
     const { data: res } = await axios.get(directUrl, { timeout: 45000 });
     const dl = res?.download_url || res?.data?.download_url || res?.result?.download_url;
     if (dl) {
-      return {
-        downloadUrl: dl,
-        title: res?.title || res?.data?.title || '',
-        thumbnail: res?.thumbnail || res?.data?.thumbnail || ''
-      };
+      return { downloadUrl: dl };
     }
   } catch (err) {
     console.warn('Direct MP3 fetch failed, trying MP4 format...');
   }
 
-  // Method 2: MP4 format fallback
   try {
     const videoUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=360p&format=mp4&api_key=${CHAMA_API_KEY}`;
     const { data: res2 } = await axios.get(videoUrl, { timeout: 45000 });
     const dl2 = res2?.download_url || res2?.data?.download_url || res2?.result?.download_url;
     if (dl2) {
-      return {
-        downloadUrl: dl2,
-        title: res2?.title || res2?.data?.title || '',
-        thumbnail: res2?.thumbnail || res2?.data?.thumbnail || ''
-      };
+      return { downloadUrl: dl2 };
     }
   } catch (e) {
     console.error('YouTube API Error:', e.message);
@@ -104,7 +91,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
 module.exports = {
   name: 'csong',
   alias: ['channelsong', 'cs'],
-  desc: 'Send YouTube song as card, voice note, and document to a channel',
+  desc: 'Send YouTube song as playable voice note only to channel',
   category: 'music',
   run: async ({ sock, msg, jid, args }) => {
     const fullText = args.join(' ').trim();
@@ -130,7 +117,7 @@ module.exports = {
       songQuery = parts.slice(1).join(',').trim();
     }
 
-    await sock.sendMessage(jid, { text: '⏳ *HESHAN OFC:* Processing song card, voice note & document for channel...' }, { quoted: msg });
+    await sock.sendMessage(jid, { text: '⏳ *HESHAN OFC:* Processing voice note for channel...' }, { quoted: msg });
 
     const tempDir = os.tmpdir();
     const tempInputFile = path.join(tempDir, `raw_${Date.now()}.bin`);
@@ -140,10 +127,6 @@ module.exports = {
       const targetChannelJid = await resolveChannelJid(sock, channelInput);
 
       let targetYoutubeUrl = songQuery;
-      let searchedTitle = songQuery;
-      let searchedThumbnail = '';
-      let searchedDuration = '03:45';
-
       const isYoutubeUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(songQuery);
       
       if (!isYoutubeUrl) {
@@ -151,44 +134,17 @@ module.exports = {
         if (!searchResult?.videos?.length) {
           return await sock.sendMessage(jid, { text: '❌ Song not found on YouTube.' }, { quoted: msg });
         }
-        const video = searchResult.videos[0];
-        targetYoutubeUrl = video.url;
-        searchedTitle = video.title;
-        searchedThumbnail = video.thumbnail;
-        searchedDuration = video.timestamp || '03:45';
+        targetYoutubeUrl = searchResult.videos[0].url;
       }
 
-      // API හරහා download link ලබා ගැනීම
+      // Download Link ලබා ගැනීම
       const ytData = await fetchYouTubeDownload(targetYoutubeUrl);
 
       if (!ytData?.downloadUrl) {
         return await sock.sendMessage(jid, { text: '❌ Failed to fetch valid download link from YouTube API.' }, { quoted: msg });
       }
 
-      const finalTitle = ytData.title || searchedTitle;
-      const finalThumbnail = ytData.thumbnail || searchedThumbnail;
-
-      // 1. Send Song Card Image
-      const songCardCaption = 
-`> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
-
-*❖ ᴛɪᴛʟᴇ :* ${finalTitle}
-
-01:23 ───🔘──────── ${searchedDuration}
-⇄     ◁   ❚❚   ▷     ↻
-
-\`\`\`➥ Don't forget to enjoy the song and leave a reaction! 🥰🎶\`\`\`
-
-> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ꜱᴏɴɢ ʜᴜʙ*`;
-
-      if (finalThumbnail) {
-        await sock.sendMessage(targetChannelJid, {
-          image: { url: finalThumbnail },
-          caption: songCardCaption
-        });
-      }
-
-      // 2. Download Media Buffer
+      // Media Buffer Download කිරීම
       const fileResponse = await axios({
         url: ytData.downloadUrl,
         method: 'GET',
@@ -202,18 +158,17 @@ module.exports = {
 
       const mediaBuffer = Buffer.from(fileResponse.data);
 
-      // Buffer එක වලංගු ගොනුවක් දැයි පරීක්ෂා කිරීම (HTML/Error string වැළැක්වීමට)
       if (mediaBuffer.length < 10000) {
         return await sock.sendMessage(jid, { text: '❌ The downloaded file was corrupt or incomplete. Please try again.' }, { quoted: msg });
       }
 
       fs.writeFileSync(tempInputFile, mediaBuffer);
 
-      // 3. Convert to WhatsApp Opus PTT
+      // Opus Voice Note (PTT) බවට හරවා ගැනීම
       await convertToOpus(tempInputFile, tempOutputFile);
       const audioSeconds = await getDuration(tempOutputFile);
 
-      // Waveform
+      // Waveform Bars
       const dummyWaveform = new Uint8Array(64);
       for (let i = 0; i < 64; i++) {
         dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
@@ -221,7 +176,7 @@ module.exports = {
 
       const opusBuffer = fs.readFileSync(tempOutputFile);
 
-      // 4. Send Voice Note (PTT)
+      // Channel එකට Voice Note එක පමණක් යැවීම
       await sock.sendMessage(targetChannelJid, {
         audio: opusBuffer,
         mimetype: 'audio/ogg; codecs=opus',
@@ -230,16 +185,8 @@ module.exports = {
         waveform: dummyWaveform
       });
 
-      // 5. Send Audio Document
-      await sock.sendMessage(targetChannelJid, {
-        document: mediaBuffer,
-        mimetype: 'audio/mpeg',
-        fileName: `${finalTitle.replace(/[\\/:*?"<>|]/g, '')}.mp3`,
-        caption: `> *📥 ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴀᴜᴅɪᴏ ꜰɪʟᴇ*`
-      });
-
       await sock.sendMessage(jid, { 
-        text: `✅ *Success!* Song card, voice note, and document uploaded to the channel.` 
+        text: `✅ *Success!* Voice note uploaded to the channel.` 
       }, { quoted: msg });
 
     } catch (error) {
