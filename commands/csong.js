@@ -14,7 +14,6 @@ const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T';
 // Active Chamindu API Key
 const CHAMA_API_KEY = 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
-// Audio Duration Helper function
 function getDuration(filePath) {
   return new Promise((resolve) => {
     ffmpeg.ffprobe(filePath, (err, metadata) => {
@@ -24,7 +23,6 @@ function getDuration(filePath) {
   });
 }
 
-// 100% WhatsApp Channel PTT Standard Opus conversion
 function convertToOpus(inputPath, outputPath) {
   return new Promise((resolve, reject) => {
     ffmpeg(inputPath)
@@ -65,39 +63,39 @@ async function resolveChannelJid(sock, channelInput) {
 }
 
 /**
- * Chamindu YouTube Toolkit API Helper
+ * Chamindu YouTube Download Link Resolver
  */
 async function fetchYouTubeDownload(targetYoutubeUrl) {
-  // 1. YouTube Toolkit Info Endpoint
+  // Method 1: YouTube Download API (MP3 Audio direct)
   try {
-    const toolkitUrl = `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${encodeURIComponent(targetYoutubeUrl)}&api_key=${CHAMA_API_KEY}`;
-    const { data: res } = await axios.get(toolkitUrl, { timeout: 35000 });
-    
-    const d = res?.data || res;
-    const downloadUrl = d?.download_url || d?.audio || d?.downloads?.audio || d?.url;
-    const title = d?.title || '';
-    const thumbnail = d?.thumbnail || d?.cover || '';
-
-    if (downloadUrl) {
-      return { downloadUrl, title, thumbnail };
+    const directUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=128k&format=mp3&api_key=${CHAMA_API_KEY}`;
+    const { data: res } = await axios.get(directUrl, { timeout: 45000 });
+    const dl = res?.download_url || res?.data?.download_url || res?.result?.download_url;
+    if (dl) {
+      return {
+        downloadUrl: dl,
+        title: res?.title || res?.data?.title || '',
+        thumbnail: res?.thumbnail || res?.data?.thumbnail || ''
+      };
     }
   } catch (err) {
-    console.warn('Toolkit Info Endpoint failed, trying Direct Download endpoint...');
+    console.warn('Direct MP3 fetch failed, trying MP4 format...');
   }
 
-  // 2. Fallback: YouTube Direct Download Endpoint
+  // Method 2: MP4 format fallback
   try {
-    const directUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=1080p&format=mp4&api_key=${CHAMA_API_KEY}`;
-    const { data: apiResponse } = await axios.get(directUrl, { timeout: 45000 });
-    const downloadUrl = apiResponse?.download_url || apiResponse?.data?.download_url;
-    const title = apiResponse?.title || apiResponse?.data?.title || '';
-    const thumbnail = apiResponse?.thumbnail || apiResponse?.data?.thumbnail || '';
-
-    if (downloadUrl) {
-      return { downloadUrl, title, thumbnail };
+    const videoUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=360p&format=mp4&api_key=${CHAMA_API_KEY}`;
+    const { data: res2 } = await axios.get(videoUrl, { timeout: 45000 });
+    const dl2 = res2?.download_url || res2?.data?.download_url || res2?.result?.download_url;
+    if (dl2) {
+      return {
+        downloadUrl: dl2,
+        title: res2?.title || res2?.data?.title || '',
+        thumbnail: res2?.thumbnail || res2?.data?.thumbnail || ''
+      };
     }
   } catch (e) {
-    console.error('Direct download endpoint error:', e.message);
+    console.error('YouTube API Error:', e.message);
   }
 
   return null;
@@ -119,17 +117,13 @@ module.exports = {
       return await sock.sendMessage(jid, { 
         text: `⚠️ *How to use:*\n\n` +
               `1️⃣ *Default Channel:* \`.csong <Song Name or YouTube Link>\`\n` +
-              `2️⃣ *Custom Channel:* \`.csong <Channel Link>, <Song Name or YouTube Link>\`\n\n` +
-              `*Examples:*\n` +
-              `• \`.csong Ma Diha\`\n` +
-              `• \`.csong https://whatsapp.com/channel/xxx, Ma Diha\`` 
+              `2️⃣ *Custom Channel:* \`.csong <Channel Link>, <Song Name or YouTube Link>\`` 
       }, { quoted: msg });
     }
 
     let channelInput = DEFAULT_CHANNEL;
     let songQuery = input;
 
-    // Custom channel check
     if (input.includes(',')) {
       const parts = input.split(',');
       channelInput = parts[0].trim();
@@ -139,7 +133,7 @@ module.exports = {
     await sock.sendMessage(jid, { text: '⏳ *HESHAN OFC:* Processing song card, voice note & document for channel...' }, { quoted: msg });
 
     const tempDir = os.tmpdir();
-    const tempInputFile = path.join(tempDir, `raw_${Date.now()}.mp4`);
+    const tempInputFile = path.join(tempDir, `raw_${Date.now()}.bin`);
     const tempOutputFile = path.join(tempDir, `vn_${Date.now()}.ogg`);
 
     try {
@@ -164,11 +158,11 @@ module.exports = {
         searchedDuration = video.timestamp || '03:45';
       }
 
-      // API Call
+      // API හරහා download link ලබා ගැනීම
       const ytData = await fetchYouTubeDownload(targetYoutubeUrl);
 
       if (!ytData?.downloadUrl) {
-        return await sock.sendMessage(jid, { text: '❌ Failed to fetch download link from API.' }, { quoted: msg });
+        return await sock.sendMessage(jid, { text: '❌ Failed to fetch valid download link from YouTube API.' }, { quoted: msg });
       }
 
       const finalTitle = ytData.title || searchedTitle;
@@ -194,23 +188,32 @@ module.exports = {
         });
       }
 
-      // 2. Download Media Stream
+      // 2. Download Media Buffer
       const fileResponse = await axios({
         url: ytData.downloadUrl,
         method: 'GET',
         responseType: 'arraybuffer',
         timeout: 120000,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
+        headers: { 
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
+          'Accept': '*/*'
+        }
       });
 
       const mediaBuffer = Buffer.from(fileResponse.data);
+
+      // Buffer එක වලංගු ගොනුවක් දැයි පරීක්ෂා කිරීම (HTML/Error string වැළැක්වීමට)
+      if (mediaBuffer.length < 10000) {
+        return await sock.sendMessage(jid, { text: '❌ The downloaded file was corrupt or incomplete. Please try again.' }, { quoted: msg });
+      }
+
       fs.writeFileSync(tempInputFile, mediaBuffer);
 
-      // 3. Convert to WhatsApp Opus PTT (Voice Note)
+      // 3. Convert to WhatsApp Opus PTT
       await convertToOpus(tempInputFile, tempOutputFile);
       const audioSeconds = await getDuration(tempOutputFile);
 
-      // Waveform bars
+      // Waveform
       const dummyWaveform = new Uint8Array(64);
       for (let i = 0; i < 64; i++) {
         dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
@@ -218,7 +221,7 @@ module.exports = {
 
       const opusBuffer = fs.readFileSync(tempOutputFile);
 
-      // 4. Send Voice Note (PTT) to Channel
+      // 4. Send Voice Note (PTT)
       await sock.sendMessage(targetChannelJid, {
         audio: opusBuffer,
         mimetype: 'audio/ogg; codecs=opus',
@@ -227,7 +230,7 @@ module.exports = {
         waveform: dummyWaveform
       });
 
-      // 5. Send Audio File / Document to Channel
+      // 5. Send Audio Document
       await sock.sendMessage(targetChannelJid, {
         document: mediaBuffer,
         mimetype: 'audio/mpeg',
