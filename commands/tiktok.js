@@ -4,7 +4,7 @@ const axios = require('axios');
 const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbBTkLI9Gv7bXpWEmg3D';
 const CHANNEL_2 = 'https://whatsapp.com/channel/0029Vb9GVpd0wajsDAReUJ2k';
 
-// 🔴 Chamindu API Key (Updated Active Key)
+// Active Chamindu API Key
 const CHAMA_API_KEY = 'chama_api_a07913f17a3e85774735fe6d9cdcdea6';
 
 /**
@@ -38,39 +38,16 @@ function formatNumber(num) {
 }
 
 /**
- * vt.tiktok.com හෝ vm.tiktok.com short links සම්පූර්ණ URL එක බවට පත් කිරීම
- */
-async function expandUrl(shortUrl) {
-  try {
-    const res = await axios.get(shortUrl, {
-      maxRedirects: 5,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-    return res.request?.res?.responseUrl || res.config?.url || shortUrl;
-  } catch (err) {
-    if (err.response?.headers?.location) {
-      return err.response.headers.location;
-    }
-    return shortUrl;
-  }
-}
-
-/**
- * Primary: Chamindu API | Fallback: TikWM
+ * Fetch TikTok Data (Chamindu API direct)
  */
 async function getTikTokData(inputUrl) {
-  const realUrl = await expandUrl(inputUrl);
-
-  // 1. Primary: Chamindu API (New Working Key)
   try {
-    const chamaUrl = `https://api.chamindu.site/api/v1/tiktok?url=${encodeURIComponent(realUrl)}&api_key=${CHAMA_API_KEY}`;
-    const res = await axios.get(chamaUrl, { timeout: 25000 });
+    const chamaUrl = `https://api.chamindu.site/api/v1/tiktok?url=${encodeURIComponent(inputUrl)}&api_key=${CHAMA_API_KEY}`;
+    const res = await axios.get(chamaUrl, { timeout: 35000 });
 
     if (res?.data?.status && res?.data?.data) {
       const v = res.data.data;
-      const downloadUrl = v.downloads?.no_watermark_hd || v.downloads?.no_watermark || v.downloads?.no_watermark_sd;
+      const downloadUrl = v.downloads?.no_watermark_hd || v.downloads?.no_watermark || v.downloads?.no_watermark_sd || v.downloads?.audio;
 
       if (downloadUrl) {
         return {
@@ -83,25 +60,29 @@ async function getTikTokData(inputUrl) {
         };
       }
     }
-  } catch (e) {
-    console.warn('Chamindu API failed, trying TikWM fallback...');
+  } catch (err) {
+    console.error('Chamindu API Error:', err.response?.data || err.message);
   }
 
-  // 2. Backup Fallback: TikWM Direct
+  // Backup fallback: TikWM public web gateway
   try {
-    const tikwmUrl = `https://www.tikwm.com/api/?url=${encodeURIComponent(realUrl)}&hd=1`;
-    const res = await axios.get(tikwmUrl, {
-      timeout: 20000,
-      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
-    });
+    const tikwmRes = await axios.post(
+      'https://www.tikwm.com/api/',
+      new URLSearchParams({ url: inputUrl, hd: 1 }),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        },
+        timeout: 25000
+      }
+    );
 
-    if (res?.data?.code === 0 && res?.data?.data) {
-      const d = res.data.data;
+    if (tikwmRes?.data?.code === 0 && tikwmRes?.data?.data) {
+      const d = tikwmRes.data.data;
       const dl = d.hdplay || d.play || d.wmplay;
-      const downloadUrl = dl.startsWith('http') ? dl : `https://www.tikwm.com${dl}`;
-
       return {
-        downloadUrl,
+        downloadUrl: dl.startsWith('http') ? dl : `https://www.tikwm.com${dl}`,
         title: d.title || '',
         author: d.author?.nickname || d.author?.unique_id || 'TikTok User',
         duration: d.duration ? `${d.duration}s` : 'N/A',
@@ -109,8 +90,8 @@ async function getTikTokData(inputUrl) {
         likes: formatNumber(d.digg_count)
       };
     }
-  } catch (err) {
-    console.error('TikTok download failed on all methods:', err.message);
+  } catch (e) {
+    console.error('TikWM Fallback Error:', e.message);
   }
 
   return null;
@@ -119,7 +100,7 @@ async function getTikTokData(inputUrl) {
 module.exports = {
   name: 'tiktok',
   alias: ['tt', 'ctiktok', 'ctt', 'ctt1'],
-  desc: 'Download TikTok video using Chamindu API with direct stream',
+  desc: 'Download TikTok video to chat or send to WhatsApp channel',
   category: 'downloader',
   run: async ({ sock, msg, jid, args, command }) => {
     try {
@@ -149,7 +130,7 @@ module.exports = {
         tiktokUrl = fullText || quotedText;
       }
 
-      // Link Extract
+      // Link Regex Matching (vt.tiktok.com, vm.tiktok.com හෝ www.tiktok.com)
       const urlMatch = tiktokUrl.match(/https?:\/\/(?:vt\.|vm\.|www\.)?tiktok\.com\/[^\s]+/i);
       if (!urlMatch) {
         return await sock.sendMessage(jid, { 
@@ -159,7 +140,8 @@ module.exports = {
         }, { quoted: msg });
       }
 
-      const validTiktokUrl = urlMatch[0];
+      // URL එක කෙළින්ම ලබා ගැනීම (අනවශ්‍ය query parameters ඉවත් කිරීම)
+      const validTiktokUrl = urlMatch[0].trim();
 
       await sock.sendMessage(jid, { 
         text: isChannelCmd 
@@ -167,7 +149,6 @@ module.exports = {
           : '⏳ *HESHAN OFC:* Downloading TikTok video...' 
       }, { quoted: msg });
 
-      // Get video data using updated API
       const videoResult = await getTikTokData(validTiktokUrl);
 
       if (!videoResult || !videoResult.downloadUrl) {
@@ -212,8 +193,7 @@ module.exports = {
         responseType: 'arraybuffer',
         timeout: 90000,
         headers: { 
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          'Referer': 'https://www.tiktok.com/'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
         }
       });
 
