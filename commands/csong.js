@@ -11,6 +11,9 @@ ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 // Default WhatsApp Channel Link
 const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T';
 
+// Active Chamindu API Key
+const CHAMA_API_KEY = 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
+
 // Audio Duration Helper function
 function getDuration(filePath) {
   return new Promise((resolve) => {
@@ -61,10 +64,49 @@ async function resolveChannelJid(sock, channelInput) {
   return input;
 }
 
+/**
+ * Chamindu YouTube Toolkit API Helper
+ */
+async function fetchYouTubeDownload(targetYoutubeUrl) {
+  // 1. YouTube Toolkit Info Endpoint
+  try {
+    const toolkitUrl = `https://api.chamindu.site/api/v1/media/youtubetoolkit/info?url=${encodeURIComponent(targetYoutubeUrl)}&api_key=${CHAMA_API_KEY}`;
+    const { data: res } = await axios.get(toolkitUrl, { timeout: 35000 });
+    
+    const d = res?.data || res;
+    const downloadUrl = d?.download_url || d?.audio || d?.downloads?.audio || d?.url;
+    const title = d?.title || '';
+    const thumbnail = d?.thumbnail || d?.cover || '';
+
+    if (downloadUrl) {
+      return { downloadUrl, title, thumbnail };
+    }
+  } catch (err) {
+    console.warn('Toolkit Info Endpoint failed, trying Direct Download endpoint...');
+  }
+
+  // 2. Fallback: YouTube Direct Download Endpoint
+  try {
+    const directUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=1080p&format=mp4&api_key=${CHAMA_API_KEY}`;
+    const { data: apiResponse } = await axios.get(directUrl, { timeout: 45000 });
+    const downloadUrl = apiResponse?.download_url || apiResponse?.data?.download_url;
+    const title = apiResponse?.title || apiResponse?.data?.title || '';
+    const thumbnail = apiResponse?.thumbnail || apiResponse?.data?.thumbnail || '';
+
+    if (downloadUrl) {
+      return { downloadUrl, title, thumbnail };
+    }
+  } catch (e) {
+    console.error('Direct download endpoint error:', e.message);
+  }
+
+  return null;
+}
+
 module.exports = {
   name: 'csong',
   alias: ['channelsong', 'cs'],
-  desc: 'Send YouTube song as card and playable voice note to a channel',
+  desc: 'Send YouTube song as card, voice note, and document to a channel',
   category: 'music',
   run: async ({ sock, msg, jid, args }) => {
     const fullText = args.join(' ').trim();
@@ -87,14 +129,14 @@ module.exports = {
     let channelInput = DEFAULT_CHANNEL;
     let songQuery = input;
 
-    // Check if custom channel link is provided with comma
+    // Custom channel check
     if (input.includes(',')) {
       const parts = input.split(',');
       channelInput = parts[0].trim();
       songQuery = parts.slice(1).join(',').trim();
     }
 
-    await sock.sendMessage(jid, { text: '⏳ *HESHAN OFC:* Processing song card & voice note for channel...' }, { quoted: msg });
+    await sock.sendMessage(jid, { text: '⏳ *HESHAN OFC:* Processing song card, voice note & document for channel...' }, { quoted: msg });
 
     const tempDir = os.tmpdir();
     const tempInputFile = path.join(tempDir, `raw_${Date.now()}.mp4`);
@@ -105,6 +147,7 @@ module.exports = {
 
       let targetYoutubeUrl = songQuery;
       let searchedTitle = songQuery;
+      let searchedThumbnail = '';
       let searchedDuration = '03:45';
 
       const isYoutubeUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(songQuery);
@@ -114,79 +157,86 @@ module.exports = {
         if (!searchResult?.videos?.length) {
           return await sock.sendMessage(jid, { text: '❌ Song not found on YouTube.' }, { quoted: msg });
         }
-        targetYoutubeUrl = searchResult.videos[0].url;
-        searchedTitle = searchResult.videos[0].title;
-        searchedDuration = searchResult.videos[0].timestamp || '03:45';
+        const video = searchResult.videos[0];
+        targetYoutubeUrl = video.url;
+        searchedTitle = video.title;
+        searchedThumbnail = video.thumbnail;
+        searchedDuration = video.timestamp || '03:45';
       }
 
       // API Call
-      const apiKey = 'chama_api_ec9848130d1aea209f08fb85e0b4720f';
-      const apiUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=1080p&format=mp4&api_key=${apiKey}`;
+      const ytData = await fetchYouTubeDownload(targetYoutubeUrl);
 
-      const { data: apiResponse } = await axios.get(apiUrl, { timeout: 60000 });
-      const downloadUrl = apiResponse?.download_url || apiResponse?.data?.download_url;
-      const title = apiResponse?.title || apiResponse?.data?.title || searchedTitle;
-      const thumbnail = apiResponse?.thumbnail || apiResponse?.data?.thumbnail;
-      const duration = searchedDuration;
-
-      if (!downloadUrl) {
+      if (!ytData?.downloadUrl) {
         return await sock.sendMessage(jid, { text: '❌ Failed to fetch download link from API.' }, { quoted: msg });
       }
+
+      const finalTitle = ytData.title || searchedTitle;
+      const finalThumbnail = ytData.thumbnail || searchedThumbnail;
 
       // 1. Send Song Card Image
       const songCardCaption = 
 `> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
 
-*❖ ᴛɪᴛʟᴇ :* ${title}
+*❖ ᴛɪᴛʟᴇ :* ${finalTitle}
 
-01:23 ───🔘──────── ${duration}
+01:23 ───🔘──────── ${searchedDuration}
 ⇄     ◁   ❚❚   ▷     ↻
 
 \`\`\`➥ Don't forget to enjoy the song and leave a reaction! 🥰🎶\`\`\`
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ꜱᴏɴɢ ʜᴜʙ*`;
 
-      await sock.sendMessage(targetChannelJid, {
-        image: { url: thumbnail },
-        caption: songCardCaption
-      });
+      if (finalThumbnail) {
+        await sock.sendMessage(targetChannelJid, {
+          image: { url: finalThumbnail },
+          caption: songCardCaption
+        });
+      }
 
-      // 2. Download Media File
+      // 2. Download Media Stream
       const fileResponse = await axios({
-        url: downloadUrl,
+        url: ytData.downloadUrl,
         method: 'GET',
         responseType: 'arraybuffer',
         timeout: 120000,
         headers: { 'User-Agent': 'Mozilla/5.0' }
       });
 
-      fs.writeFileSync(tempInputFile, Buffer.from(fileResponse.data));
+      const mediaBuffer = Buffer.from(fileResponse.data);
+      fs.writeFileSync(tempInputFile, mediaBuffer);
 
-      // 3. Convert to WhatsApp Opus PTT
+      // 3. Convert to WhatsApp Opus PTT (Voice Note)
       await convertToOpus(tempInputFile, tempOutputFile);
-
-      // 4. Calculate Duration
       const audioSeconds = await getDuration(tempOutputFile);
 
-      // 5. Generate Waveform Bars
+      // Waveform bars
       const dummyWaveform = new Uint8Array(64);
       for (let i = 0; i < 64; i++) {
         dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
       }
 
-      const audioBuffer = fs.readFileSync(tempOutputFile);
+      const opusBuffer = fs.readFileSync(tempOutputFile);
 
-      // 6. Send Voice Note to Channel
+      // 4. Send Voice Note (PTT) to Channel
       await sock.sendMessage(targetChannelJid, {
-        audio: audioBuffer,
+        audio: opusBuffer,
         mimetype: 'audio/ogg; codecs=opus',
         ptt: true,
         seconds: audioSeconds,
         waveform: dummyWaveform
       });
 
+      // 5. Send Audio File / Document to Channel
+      await sock.sendMessage(targetChannelJid, {
+        document: mediaBuffer,
+        mimetype: 'audio/mpeg',
+        fileName: `${finalTitle.replace(/[\\/:*?"<>|]/g, '')}.mp3`,
+        caption: `> *📥 ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴀᴜᴅɪᴏ ꜰɪʟᴇ*`
+      });
+
       await sock.sendMessage(jid, { 
-        text: `✅ *Success!* Song card and voice note have been uploaded to the channel.` 
+        text: `✅ *Success!* Song card, voice note, and document uploaded to the channel.` 
       }, { quoted: msg });
 
     } catch (error) {
