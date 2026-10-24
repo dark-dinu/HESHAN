@@ -4,11 +4,11 @@ const axios = require('axios');
 const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbBTkLI9Gv7bXpWEmg3D';
 const CHANNEL_2 = 'https://whatsapp.com/channel/0029Vb9GVpd0wajsDAReUJ2k';
 
-// Active Chamindu API Key
-const CHAMA_API_KEY = 'chama_api_a07913f17a3e85774735fe6d9cdcdea6';
+// 🔴 Chamindu API Key (100% Active Working Key)
+const CHAMA_API_KEY = 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
 /**
- * WhatsApp Channel JID Resolver
+ * WhatsApp Channel JID Resolver (@newsletter format)
  */
 async function resolveChannelJid(sock, channelInput) {
   let input = channelInput.trim();
@@ -37,66 +37,6 @@ function formatNumber(num) {
   return num.toString();
 }
 
-/**
- * Fetch TikTok Data (Chamindu API direct)
- */
-async function getTikTokData(inputUrl) {
-  try {
-    const chamaUrl = `https://api.chamindu.site/api/v1/tiktok?url=${encodeURIComponent(inputUrl)}&api_key=${CHAMA_API_KEY}`;
-    const res = await axios.get(chamaUrl, { timeout: 35000 });
-
-    if (res?.data?.status && res?.data?.data) {
-      const v = res.data.data;
-      const downloadUrl = v.downloads?.no_watermark_hd || v.downloads?.no_watermark || v.downloads?.no_watermark_sd || v.downloads?.audio;
-
-      if (downloadUrl) {
-        return {
-          downloadUrl,
-          title: v.title || '',
-          author: v.author?.nickname || v.author?.unique_id || 'TikTok User',
-          duration: v.duration ? `${v.duration}s` : 'N/A',
-          views: formatNumber(v.stats?.views),
-          likes: formatNumber(v.stats?.likes)
-        };
-      }
-    }
-  } catch (err) {
-    console.error('Chamindu API Error:', err.response?.data || err.message);
-  }
-
-  // Backup fallback: TikWM public web gateway
-  try {
-    const tikwmRes = await axios.post(
-      'https://www.tikwm.com/api/',
-      new URLSearchParams({ url: inputUrl, hd: 1 }),
-      {
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        },
-        timeout: 25000
-      }
-    );
-
-    if (tikwmRes?.data?.code === 0 && tikwmRes?.data?.data) {
-      const d = tikwmRes.data.data;
-      const dl = d.hdplay || d.play || d.wmplay;
-      return {
-        downloadUrl: dl.startsWith('http') ? dl : `https://www.tikwm.com${dl}`,
-        title: d.title || '',
-        author: d.author?.nickname || d.author?.unique_id || 'TikTok User',
-        duration: d.duration ? `${d.duration}s` : 'N/A',
-        views: formatNumber(d.play_count),
-        likes: formatNumber(d.digg_count)
-      };
-    }
-  } catch (e) {
-    console.error('TikWM Fallback Error:', e.message);
-  }
-
-  return null;
-}
-
 module.exports = {
   name: 'tiktok',
   alias: ['tt', 'ctiktok', 'ctt', 'ctt1'],
@@ -109,6 +49,7 @@ module.exports = {
       const isChannelCmd = cmdUsed === 'ctt' || cmdUsed === 'ctiktok' || cmdUsed === 'ctt1';
       const isChannel2 = cmdUsed === 'ctt1';
 
+      // Reply message text extract
       const quotedText = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
                          msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text || '';
 
@@ -130,7 +71,7 @@ module.exports = {
         tiktokUrl = fullText || quotedText;
       }
 
-      // Link Regex Matching (vt.tiktok.com, vm.tiktok.com හෝ www.tiktok.com)
+      // TikTok link extract (vt, vm හෝ www)
       const urlMatch = tiktokUrl.match(/https?:\/\/(?:vt\.|vm\.|www\.)?tiktok\.com\/[^\s]+/i);
       if (!urlMatch) {
         return await sock.sendMessage(jid, { 
@@ -140,7 +81,6 @@ module.exports = {
         }, { quoted: msg });
       }
 
-      // URL එක කෙළින්ම ලබා ගැනීම (අනවශ්‍ය query parameters ඉවත් කිරීම)
       const validTiktokUrl = urlMatch[0].trim();
 
       await sock.sendMessage(jid, { 
@@ -149,28 +89,45 @@ module.exports = {
           : '⏳ *HESHAN OFC:* Downloading TikTok video...' 
       }, { quoted: msg });
 
-      const videoResult = await getTikTokData(validTiktokUrl);
+      // Chamindu API Call
+      const chamaUrl = `https://api.chamindu.site/api/v1/tiktok?url=${encodeURIComponent(validTiktokUrl)}&api_key=${CHAMA_API_KEY}`;
+      const { data: res } = await axios.get(chamaUrl, { timeout: 45000 });
 
-      if (!videoResult || !videoResult.downloadUrl) {
+      if (!res?.status || !res?.data) {
         return await sock.sendMessage(jid, { 
           text: '❌ Could not retrieve TikTok video. The link might be invalid or private.' 
         }, { quoted: msg });
       }
 
-      const cleanTitle = (videoResult.title || '')
+      const v = res.data;
+      const downloadUrl = v.downloads?.no_watermark_hd || v.downloads?.no_watermark || v.downloads?.no_watermark_sd;
+
+      if (!downloadUrl) {
+        return await sock.sendMessage(jid, { 
+          text: '❌ No watermark-free video download link found.' 
+        }, { quoted: msg });
+      }
+
+      // Title එකෙන් # tags සහ @ mentions ඉවත් කර පිරිසිදු කිරීම
+      const cleanTitle = (v.title || '')
         .replace(/#\S+/g, '')
         .replace(/@\S+/g, '')
         .replace(/\s+/g, ' ')
         .trim();
 
-      // Normal Chat Caption
+      const author = v.author?.nickname || v.author?.unique_id || 'TikTok User';
+      const duration = v.duration ? `${v.duration}s` : 'N/A';
+      const views = formatNumber(v.stats?.views);
+      const likes = formatNumber(v.stats?.likes);
+
+      // Normal Chat Caption Design
       const normalChatCaption = 
 `> *🎬⃝✨ H E S H A N   O F C   T I K T O K*
 
-*❖ ᴛɪᴛʟᴇ :* ${cleanTitle || videoResult.title || 'TikTok Video'}
-*❖ ᴄʀᴇᴀᴛᴏʀ :* @${videoResult.author}
-*❖ ᴅᴜʀᴀᴛɪᴏɴ :* ${videoResult.duration}
-*❖ ᴠɪᴇᴡs :* ${videoResult.views} • *ʟɪᴋᴇs :* ${videoResult.likes}
+*❖ ᴛɪᴛʟᴇ :* ${cleanTitle || v.title || 'TikTok Video'}
+*❖ ᴄʀᴇᴀᴛᴏʀ :* @${author}
+*❖ ᴅᴜʀᴀᴛɪᴏɴ :* ${duration}
+*❖ ᴠɪᴇᴡs :* ${views} • *ʟɪᴋᴇs :* ${likes}
 
 \`\`\`➥ Enjoy the video without watermark! 🍿✨\`\`\`
 
@@ -179,16 +136,18 @@ module.exports = {
       // Channel Caption (.ctt / .ctt1)
       let channelCaption = '';
       if (isChannel2) {
-        channelCaption = cleanTitle || videoResult.title || '';
+        // .ctt1: කිසිම නමක් නැතුව title එක පමණි
+        channelCaption = cleanTitle || v.title || '';
       } else {
+        // .ctt: නම සහිතව
         channelCaption = cleanTitle 
           ? `${cleanTitle}\n\n> *𝄞𝄢𝐑𝐚ප විතරමයි || 🎧🇱🇰*`
           : `> *𝄞𝄢𝐑𝐚ප විතරමයි || 🎧🇱🇰*`;
       }
 
-      // Download Stream Buffer
+      // Video Stream Buffer Download
       const videoStream = await axios({
-        url: videoResult.downloadUrl,
+        url: downloadUrl,
         method: 'GET',
         responseType: 'arraybuffer',
         timeout: 90000,
@@ -200,6 +159,7 @@ module.exports = {
       const videoBuffer = Buffer.from(videoStream.data);
 
       if (isChannelCmd) {
+        // Channel එකට යැවීම
         await sock.sendMessage(destinationJid, {
           video: videoBuffer,
           caption: channelCaption,
@@ -211,6 +171,7 @@ module.exports = {
         }, { quoted: msg });
 
       } else {
+        // Chat එකට යැවීම
         await sock.sendMessage(jid, {
           video: videoBuffer,
           caption: normalChatCaption,
