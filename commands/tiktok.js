@@ -4,6 +4,9 @@ const axios = require('axios');
 const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbBTkLI9Gv7bXpWEmg3D';
 const CHANNEL_2 = 'https://whatsapp.com/channel/0029Vb9GVpd0wajsDAReUJ2k';
 
+// 🔴 Chamindu API Key (Updated Active Key)
+const CHAMA_API_KEY = 'chama_api_a07913f17a3e85774735fe6d9cdcdea6';
+
 /**
  * WhatsApp Channel JID Resolver
  */
@@ -42,7 +45,7 @@ async function expandUrl(shortUrl) {
     const res = await axios.get(shortUrl, {
       maxRedirects: 5,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
       }
     });
     return res.request?.res?.responseUrl || res.config?.url || shortUrl;
@@ -55,19 +58,41 @@ async function expandUrl(shortUrl) {
 }
 
 /**
- * 100% Free Multi-Engine Direct Scraper
+ * Primary: Chamindu API | Fallback: TikWM
  */
-async function getTikTokDirect(inputUrl) {
-  // Short URL එකක් නම් expand කිරීම
+async function getTikTokData(inputUrl) {
   const realUrl = await expandUrl(inputUrl);
 
-  // Engine 1: TikWM Web API
+  // 1. Primary: Chamindu API (New Working Key)
   try {
-    const res = await axios.get(`https://www.tikwm.com/api/?url=${encodeURIComponent(realUrl)}&hd=1`, {
-      timeout: 20000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+    const chamaUrl = `https://api.chamindu.site/api/v1/tiktok?url=${encodeURIComponent(realUrl)}&api_key=${CHAMA_API_KEY}`;
+    const res = await axios.get(chamaUrl, { timeout: 25000 });
+
+    if (res?.data?.status && res?.data?.data) {
+      const v = res.data.data;
+      const downloadUrl = v.downloads?.no_watermark_hd || v.downloads?.no_watermark || v.downloads?.no_watermark_sd;
+
+      if (downloadUrl) {
+        return {
+          downloadUrl,
+          title: v.title || '',
+          author: v.author?.nickname || v.author?.unique_id || 'TikTok User',
+          duration: v.duration ? `${v.duration}s` : 'N/A',
+          views: formatNumber(v.stats?.views),
+          likes: formatNumber(v.stats?.likes)
+        };
       }
+    }
+  } catch (e) {
+    console.warn('Chamindu API failed, trying TikWM fallback...');
+  }
+
+  // 2. Backup Fallback: TikWM Direct
+  try {
+    const tikwmUrl = `https://www.tikwm.com/api/?url=${encodeURIComponent(realUrl)}&hd=1`;
+    const res = await axios.get(tikwmUrl, {
+      timeout: 20000,
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
     });
 
     if (res?.data?.code === 0 && res?.data?.data) {
@@ -84,46 +109,8 @@ async function getTikTokDirect(inputUrl) {
         likes: formatNumber(d.digg_count)
       };
     }
-  } catch (e) {
-    console.warn('TikWM failed, trying Engine 2...');
-  }
-
-  // Engine 2: Tiklydown Public API
-  try {
-    const res = await axios.get(`https://api.tiklydown.eu.org/api/download?url=${encodeURIComponent(realUrl)}`, {
-      timeout: 20000
-    });
-    if (res?.data?.video?.noWatermark) {
-      return {
-        downloadUrl: res.data.video.noWatermark,
-        title: res.data.title || '',
-        author: res.data.author?.name || 'TikTok User',
-        duration: 'N/A',
-        views: 'N/A',
-        likes: 'N/A'
-      };
-    }
-  } catch (e) {
-    console.warn('Tiklydown failed, trying Engine 3...');
-  }
-
-  // Engine 3: LoLHuman Public Downloader
-  try {
-    const res = await axios.get(`https://api.lolhuman.xyz/api/tiktok?apikey=trial&url=${encodeURIComponent(realUrl)}`, {
-      timeout: 20000
-    });
-    if (res?.data?.result?.link) {
-      return {
-        downloadUrl: res.data.result.link,
-        title: res.data.result.title || '',
-        author: res.data.result.author || 'TikTok User',
-        duration: 'N/A',
-        views: 'N/A',
-        likes: 'N/A'
-      };
-    }
-  } catch (e) {
-    console.error('All engines failed:', e.message);
+  } catch (err) {
+    console.error('TikTok download failed on all methods:', err.message);
   }
 
   return null;
@@ -132,7 +119,7 @@ async function getTikTokDirect(inputUrl) {
 module.exports = {
   name: 'tiktok',
   alias: ['tt', 'ctiktok', 'ctt', 'ctt1'],
-  desc: 'Download TikTok video without any API key directly',
+  desc: 'Download TikTok video using Chamindu API with direct stream',
   category: 'downloader',
   run: async ({ sock, msg, jid, args, command }) => {
     try {
@@ -162,7 +149,7 @@ module.exports = {
         tiktokUrl = fullText || quotedText;
       }
 
-      // Link extract කර ගැනීම
+      // Link Extract
       const urlMatch = tiktokUrl.match(/https?:\/\/(?:vt\.|vm\.|www\.)?tiktok\.com\/[^\s]+/i);
       if (!urlMatch) {
         return await sock.sendMessage(jid, { 
@@ -180,8 +167,8 @@ module.exports = {
           : '⏳ *HESHAN OFC:* Downloading TikTok video...' 
       }, { quoted: msg });
 
-      // Direct Scraper Call
-      const videoResult = await getTikTokDirect(validTiktokUrl);
+      // Get video data using updated API
+      const videoResult = await getTikTokData(validTiktokUrl);
 
       if (!videoResult || !videoResult.downloadUrl) {
         return await sock.sendMessage(jid, { 
