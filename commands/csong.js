@@ -68,7 +68,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
     const { data: res } = await axios.get(directUrl, { timeout: 45000 });
     const dl = res?.download_url || res?.data?.download_url || res?.result?.download_url;
     if (dl) {
-      return { downloadUrl: dl };
+      return { downloadUrl: dl, title: res?.title || res?.data?.title || '', thumbnail: res?.thumbnail || res?.data?.thumbnail || '' };
     }
   } catch (err) {
     console.warn('Direct MP3 fetch failed, trying MP4 format...');
@@ -79,7 +79,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
     const { data: res2 } = await axios.get(videoUrl, { timeout: 45000 });
     const dl2 = res2?.download_url || res2?.data?.download_url || res2?.result?.download_url;
     if (dl2) {
-      return { downloadUrl: dl2 };
+      return { downloadUrl: dl2, title: res2?.title || res2?.data?.title || '', thumbnail: res2?.thumbnail || res2?.data?.thumbnail || '' };
     }
   } catch (e) {
     console.error('YouTube API Error:', e.message);
@@ -91,7 +91,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
 module.exports = {
   name: 'csong',
   alias: ['channelsong', 'cs'],
-  desc: 'Send YouTube song as playable voice note only to channel',
+  desc: 'Send YouTube song as card and playable voice note to a channel',
   category: 'music',
   run: async ({ sock, msg, jid, args }) => {
     const fullText = args.join(' ').trim();
@@ -117,7 +117,7 @@ module.exports = {
       songQuery = parts.slice(1).join(',').trim();
     }
 
-    await sock.sendMessage(jid, { text: '⏳ *HESHAN OFC:* Processing voice note for channel...' }, { quoted: msg });
+    await sock.sendMessage(jid, { text: '⏳ *HESHAN OFC:* Processing song card & voice note for channel...' }, { quoted: msg });
 
     const tempDir = os.tmpdir();
     const tempInputFile = path.join(tempDir, `raw_${Date.now()}.bin`);
@@ -127,6 +127,10 @@ module.exports = {
       const targetChannelJid = await resolveChannelJid(sock, channelInput);
 
       let targetYoutubeUrl = songQuery;
+      let searchedTitle = songQuery;
+      let searchedThumbnail = '';
+      let searchedDuration = '03:45';
+
       const isYoutubeUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(songQuery);
       
       if (!isYoutubeUrl) {
@@ -134,17 +138,43 @@ module.exports = {
         if (!searchResult?.videos?.length) {
           return await sock.sendMessage(jid, { text: '❌ Song not found on YouTube.' }, { quoted: msg });
         }
-        targetYoutubeUrl = searchResult.videos[0].url;
+        const video = searchResult.videos[0];
+        targetYoutubeUrl = video.url;
+        searchedTitle = video.title;
+        searchedThumbnail = video.thumbnail;
+        searchedDuration = video.timestamp || '03:45';
       }
 
-      // Download Link ලබා ගැනීම
       const ytData = await fetchYouTubeDownload(targetYoutubeUrl);
 
       if (!ytData?.downloadUrl) {
         return await sock.sendMessage(jid, { text: '❌ Failed to fetch valid download link from YouTube API.' }, { quoted: msg });
       }
 
-      // Media Buffer Download කිරීම
+      const finalTitle = ytData.title || searchedTitle;
+      const finalThumbnail = ytData.thumbnail || searchedThumbnail;
+
+      // 1. Send Song Card Image to Channel
+      const songCardCaption = 
+`> *🎵⃝✨ H E S H A N   O F C   M U S I C* 
+
+*❖ ᴛɪᴛʟᴇ :* ${finalTitle}
+
+01:23 ───🔘──────── ${searchedDuration}
+⇄     ◁   ❚❚   ▷     ↻
+
+\`\`\`➥ Don't forget to enjoy the song and leave a reaction! 🥰🎶\`\`\`
+
+> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ꜱᴏɴɢ ʜᴜʙ*`;
+
+      if (finalThumbnail) {
+        await sock.sendMessage(targetChannelJid, {
+          image: { url: finalThumbnail },
+          caption: songCardCaption
+        });
+      }
+
+      // 2. Download Media Buffer
       const fileResponse = await axios({
         url: ytData.downloadUrl,
         method: 'GET',
@@ -164,11 +194,11 @@ module.exports = {
 
       fs.writeFileSync(tempInputFile, mediaBuffer);
 
-      // Opus Voice Note (PTT) බවට හරවා ගැනීම
+      // 3. Convert to WhatsApp Opus PTT
       await convertToOpus(tempInputFile, tempOutputFile);
       const audioSeconds = await getDuration(tempOutputFile);
 
-      // Waveform Bars
+      // 4. Generate Waveform Bars
       const dummyWaveform = new Uint8Array(64);
       for (let i = 0; i < 64; i++) {
         dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
@@ -176,7 +206,7 @@ module.exports = {
 
       const opusBuffer = fs.readFileSync(tempOutputFile);
 
-      // Channel එකට Voice Note එක පමණක් යැවීම
+      // 5. Send Playable Voice Note (PTT) to Channel
       await sock.sendMessage(targetChannelJid, {
         audio: opusBuffer,
         mimetype: 'audio/ogg; codecs=opus',
@@ -186,7 +216,7 @@ module.exports = {
       });
 
       await sock.sendMessage(jid, { 
-        text: `✅ *Success!* Voice note uploaded to the channel.` 
+        text: `✅ *Success!* Song card and voice note uploaded to the channel.` 
       }, { quoted: msg });
 
     } catch (error) {
