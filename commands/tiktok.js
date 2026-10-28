@@ -7,8 +7,11 @@ const CHANNEL_2 = 'https://whatsapp.com/channel/0029Vb9GVpd0wajsDAReUJ2k';
 // 🔴 Chamindu API Key (100% Active Working Key)
 const CHAMA_API_KEY = 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
-// 💬 .ctt වීඩියෝව ගිය පසු Channel එකට ස්වයංක්‍රීයව යන Text Message එක
+// 💬 .ctt වීඩියෝව ගොස් තත්පර 15කින් Channel එකට යන Text Message එක
 const EXTRA_TEXT_MESSAGE = `*ඊලග video එක ඕනිනම් මේ video එකට react 30 ක් දෙන්න යාලුවනේ....😈☝️✊*`;
+
+// Delay Helper Function (Milliseconds)
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
  * WhatsApp Channel JID Resolver (@newsletter format)
@@ -145,8 +148,8 @@ module.exports = {
       } else {
         // .ctt: නම සහිතව
         channelCaption = cleanTitle 
-          ? `${cleanTitle}\n\n> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`
-          : `> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`;
+          ? `${cleanTitle}\n\n> *𝄞𝄢𝐑𝐚ප විතරමයි || 🎧🇱🇰*`
+          : `> *𝄞𝄢𝐑𝐚ප විතරමයි || 🎧🇱🇰*`;
       }
 
       // Video Stream Buffer Download
@@ -170,16 +173,17 @@ module.exports = {
           mimetype: 'video/mp4'
         });
 
-        // 2. .ctt cmd එකට පමණක් auto text message එක channel එකට යැවීම
+        await sock.sendMessage(jid, { 
+          text: `✅ *Success!* TikTok video uploaded to the channel.` 
+        }, { quoted: msg });
+
+        // 2. .ctt වලට පමණක් තත්පර 15ක් රැඳී සිට message එක යැවීම
         if (isOnlyCtt) {
+          await delay(15000); // 15 Seconds delay
           await sock.sendMessage(destinationJid, {
             text: EXTRA_TEXT_MESSAGE
           });
         }
-
-        await sock.sendMessage(jid, { 
-          text: `✅ *Success!* TikTok video uploaded to the channel.` 
-        }, { quoted: msg });
 
       } else {
         // Normal Chat එකට යැවීම
