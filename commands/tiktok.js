@@ -7,6 +7,9 @@ const CHANNEL_2 = 'https://whatsapp.com/channel/0029Vb9GVpd0wajsDAReUJ2k';
 // 🔴 Chamindu API Key (100% Active Working Key)
 const CHAMA_API_KEY = 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
+// 💬 .ctt වීඩියෝව ගිය පසු Channel එකට ස්වයංක්‍රීයව යන Text Message එක
+const EXTRA_TEXT_MESSAGE = `*ඊලග video එක ඕනිනම් මේ video එකට react 30 ක් දෙන්න යාලුවනේ....😈☝️✊*`;
+
 /**
  * WhatsApp Channel JID Resolver (@newsletter format)
  */
@@ -48,6 +51,7 @@ module.exports = {
       const cmdUsed = (command || messageText.trim().split(/\s+/)[0].slice(1)).toLowerCase();
       const isChannelCmd = cmdUsed === 'ctt' || cmdUsed === 'ctiktok' || cmdUsed === 'ctt1';
       const isChannel2 = cmdUsed === 'ctt1';
+      const isOnlyCtt = cmdUsed === 'ctt';
 
       // Reply message text extract
       const quotedText = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
@@ -108,7 +112,7 @@ module.exports = {
         }, { quoted: msg });
       }
 
-      // Title එකෙන් # tags සහ @ mentions ඉවත් කර පිරිසිදු කිරීම
+      // Title clean-up
       const cleanTitle = (v.title || '')
         .replace(/#\S+/g, '')
         .replace(/@\S+/g, '')
@@ -136,13 +140,13 @@ module.exports = {
       // Channel Caption (.ctt / .ctt1)
       let channelCaption = '';
       if (isChannel2) {
-        // .ctt1: කිසිම නමක් නැතුව title එක පමණි
+        // .ctt1: නම නැතුව title පමණි
         channelCaption = cleanTitle || v.title || '';
       } else {
         // .ctt: නම සහිතව
         channelCaption = cleanTitle 
-          ? `${cleanTitle}\n\n> *𝄞𝄢𝐑𝐚ප විතරමයි || 🎧🇱🇰*`
-          : `> *𝄞𝄢𝐑𝐚ප විතරමයි || 🎧🇱🇰*`;
+          ? `${cleanTitle}\n\n> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`
+          : `> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`;
       }
 
       // Video Stream Buffer Download
@@ -159,19 +163,26 @@ module.exports = {
       const videoBuffer = Buffer.from(videoStream.data);
 
       if (isChannelCmd) {
-        // Channel එකට යැවීම
+        // 1. Video එක Channel එකට Upload කිරීම
         await sock.sendMessage(destinationJid, {
           video: videoBuffer,
           caption: channelCaption,
           mimetype: 'video/mp4'
         });
 
+        // 2. .ctt cmd එකට පමණක් auto text message එක channel එකට යැවීම
+        if (isOnlyCtt) {
+          await sock.sendMessage(destinationJid, {
+            text: EXTRA_TEXT_MESSAGE
+          });
+        }
+
         await sock.sendMessage(jid, { 
           text: `✅ *Success!* TikTok video uploaded to the channel.` 
         }, { quoted: msg });
 
       } else {
-        // Chat එකට යැවීම
+        // Normal Chat එකට යැවීම
         await sock.sendMessage(jid, {
           video: videoBuffer,
           caption: normalChatCaption,
