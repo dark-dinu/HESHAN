@@ -3,11 +3,8 @@ const axios = require('axios');
 // Default WhatsApp Channel Links
 const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbBTkLI9Gv7bXpWEmg3D';
 
-// Chamindu Active API Key
-const CHAMA_API_KEY = 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
-
 /**
- * WhatsApp Channel JID Resolver (@newsletter format)
+ * WhatsApp Channel JID Resolver (@newsletter)
  */
 async function resolveChannelJid(sock, channelInput) {
   let input = channelInput.trim();
@@ -29,9 +26,101 @@ async function resolveChannelJid(sock, channelInput) {
   return input;
 }
 
+/**
+ * Pinterest Short URL (pin.it) expander
+ */
+async function expandPinUrl(shortUrl) {
+  try {
+    const res = await axios.get(shortUrl, {
+      maxRedirects: 5,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    return res.request?.res?.responseUrl || res.config?.url || shortUrl;
+  } catch (e) {
+    if (e.response?.headers?.location) return e.response.headers.location;
+    return shortUrl;
+  }
+}
+
+/**
+ * Direct Pinterest Video & Image Extractor (No broken proxy)
+ */
+async function getPinterestMedia(url) {
+  const fullUrl = await expandPinUrl(url);
+
+  // Method 1: Direct Web HTML Metadata Scraping
+  try {
+    const { data: html } = await axios.get(fullUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+      },
+      timeout: 20000
+    });
+
+    // Check for MP4 Video URL in HTML/JSON data
+    const videoMatch = html.match(/https?:\/\/[^"'\s]+\.mp4/i);
+    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+    const imageMatch = html.match(/https?:\/\/i\.pinimg\.com\/originals\/[^"'\s]+\.(jpg|jpeg|png|webp)/i) ||
+                       html.match(/https?:\/\/i\.pinimg\.com\/736x\/[^"'\s]+\.(jpg|jpeg|png|webp)/i);
+
+    let cleanTitle = titleMatch ? titleMatch[1].replace(' | Pinterest', '').trim() : 'Pinterest Media';
+
+    if (videoMatch && videoMatch[0]) {
+      // Decode unicode slashes if any
+      const cleanVideoUrl = videoMatch[0].replace(/\\u002F/g, '/');
+      return {
+        isVideo: true,
+        downloadUrl: cleanVideoUrl,
+        title: cleanTitle
+      };
+    }
+
+    if (imageMatch && imageMatch[0]) {
+      return {
+        isVideo: false,
+        downloadUrl: imageMatch[0].replace(/\\u002F/g, '/'),
+        title: cleanTitle
+      };
+    }
+  } catch (err) {
+    console.warn('Direct HTML scrape failed, trying API scraper...');
+  }
+
+  // Method 2: Public Pinterest Downloader Gateway
+  try {
+    const apiRes = await axios.get(`https://api.siputzx.my.id/api/d/pinterest?url=${encodeURIComponent(fullUrl)}`, {
+      timeout: 20000
+    });
+
+    if (apiRes?.data?.status && apiRes?.data?.data) {
+      const d = apiRes.data.data;
+      if (d.video || d.url?.endsWith('.mp4')) {
+        return {
+          isVideo: true,
+          downloadUrl: d.video || d.url,
+          title: d.title || 'Pinterest Video'
+        };
+      }
+      if (d.image || d.url) {
+        return {
+          isVideo: false,
+          downloadUrl: d.image || d.url,
+          title: d.title || 'Pinterest Image'
+        };
+      }
+    }
+  } catch (e) {
+    console.error('Pinterest extraction error:', e.message);
+  }
+
+  return null;
+}
+
 module.exports = {
   name: 'pinterest',
-  alias: ['pt', 'pinvideo', 'pindl', 'cpvd'],
+  alias: ['pvd', 'pinvideo', 'pindl', 'cpvd'],
   desc: 'Download Pinterest Video or Image to chat or channel',
   category: 'downloader',
   run: async ({ sock, msg, jid, args, command }) => {
@@ -60,7 +149,7 @@ module.exports = {
         pinUrl = fullText || quotedText;
       }
 
-      // Pinterest Link Regex (pin.it හෝ pinterest.com)
+      // Pinterest Regex (Supports pin.it & pinterest.com)
       const urlMatch = pinUrl.match(/https?:\/\/(?:www\.)?(?:[a-z]{2}\.)?pinterest\.(?:com|it)\/[^\s]+|https?:\/\/pin\.it\/[^\s]+/i);
       if (!urlMatch) {
         return await sock.sendMessage(jid, { 
@@ -78,39 +167,19 @@ module.exports = {
           : '⏳ *HESHAN OFC:* Downloading Pinterest media...' 
       }, { quoted: msg });
 
-      // Chamindu Pinterest API Call
-      const apiUrl = `https://api.chamindu.site/api/v1/media/pinterest/infodl?q=${encodeURIComponent(validPinUrl)}&api_key=${CHAMA_API_KEY}`;
-      const { data: res } = await axios.get(apiUrl, { timeout: 45000 });
+      // Media දත්ත ලබාගැනීම
+      const mediaResult = await getPinterestMedia(validPinUrl);
 
-      if (!res?.status || !res?.data) {
+      if (!mediaResult || !mediaResult.downloadUrl) {
         return await sock.sendMessage(jid, { 
-          text: '❌ Could not retrieve Pinterest media. The link might be invalid or private.' 
+          text: '❌ Could not retrieve Pinterest video or image. Please make sure the link is public.' 
         }, { quoted: msg });
       }
 
-      const pinData = res.data;
-      const downloads = pinData.downloads || [];
+      const isVideo = mediaResult.isVideo;
+      const title = mediaResult.title || 'Pinterest Media';
 
-      // Video download link එකක් තිබේදැයි බැලීම (නැතිනම් Image link එක ගැනීම)
-      let selectedMedia = downloads.find(d => d.type === 'video' || d.type === 'video_hd' || d.name?.toLowerCase().includes('video'));
-      let isVideo = true;
-
-      if (!selectedMedia) {
-        isVideo = false;
-        selectedMedia = downloads.find(d => d.type === 'image_direct' || d.type === 'image') || { link: pinData.image };
-      }
-
-      const mediaUrl = selectedMedia?.link || pinData.image;
-
-      if (!mediaUrl) {
-        return await sock.sendMessage(jid, { 
-          text: '❌ No direct download stream found for this Pin.' 
-        }, { quoted: msg });
-      }
-
-      const title = (pinData.title || 'Pinterest Media').replace(/\s+/g, ' ').trim();
-
-      // Normal Chat Caption Design
+      // Captions
       const normalCaption = 
 `> *📌⃝✨ H E S H A N   O F C   P I N T E R E S T*
 
@@ -121,12 +190,11 @@ module.exports = {
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`;
 
-      // Channel Caption
       const channelCaption = `${title}\n\n> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`;
 
-      // Buffer එක Download කර ගැනීම
+      // Media Buffer Download
       const fileStream = await axios({
-        url: mediaUrl,
+        url: mediaResult.downloadUrl,
         method: 'GET',
         responseType: 'arraybuffer',
         timeout: 90000,
