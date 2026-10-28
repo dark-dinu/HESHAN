@@ -30,92 +30,115 @@ async function resolveChannelJid(sock, channelInput) {
 }
 
 /**
- * 100% Reliable Pinterest Downloader Engine
+ * Short links (pin.it) expander
  */
-async function getPinterestData(pinUrl) {
-  // Method 1: Chamindu Pinterest API
+async function expandUrl(shortUrl) {
   try {
-    const chamaUrl = `https://api.chamindu.site/api/v1/media/pinterest/infodl?q=${encodeURIComponent(pinUrl)}&api_key=${CHAMA_API_KEY}`;
+    const res = await axios.get(shortUrl, {
+      maxRedirects: 5,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
+    });
+    return res.request?.res?.responseUrl || res.config?.url || shortUrl;
+  } catch (err) {
+    if (err.response?.headers?.location) return err.response.headers.location;
+    return shortUrl;
+  }
+}
+
+/**
+ * High Priority Pinterest Video Extractor
+ */
+async function fetchPinterestMedia(rawUrl) {
+  const fullUrl = await expandUrl(rawUrl);
+
+  // 1. Direct Page JSON Scraping (Pinterest page එක ඇතුළෙන්ම MP4 video stream එක ඇද ගැනීම)
+  try {
+    const { data: html } = await axios.get(fullUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+      },
+      timeout: 20000
+    });
+
+    // Pinterest videos වල direct 720p / 1080p MP4 URLs regex
+    const videoMatches = html.match(/https?:\/\/[^"'\s]+\.mp4/g);
+    const titleMatch = html.match(/<title>(.*?)<\/title>/i);
+    let title = titleMatch ? titleMatch[1].replace(' | Pinterest', '').trim() : 'Pinterest Media';
+
+    if (videoMatches && videoMatches.length > 0) {
+      // 720p හෝ හොඳම quality MP4 එක තෝරා ගැනීම
+      const bestVideo = videoMatches.find(v => v.includes('720p') || v.includes('exp=')) || videoMatches[0];
+      const cleanVideoUrl = bestVideo.replace(/\\u002F/g, '/');
+      return {
+        isVideo: true,
+        downloadUrl: cleanVideoUrl,
+        title
+      };
+    }
+  } catch (e) {
+    console.warn('Direct web inspection failed, checking Chamindu API...');
+  }
+
+  // 2. Chamindu API (Check video specific objects)
+  try {
+    const chamaUrl = `https://api.chamindu.site/api/v1/media/pinterest/infodl?q=${encodeURIComponent(fullUrl)}&api_key=${CHAMA_API_KEY}`;
     const { data: res } = await axios.get(chamaUrl, { timeout: 25000 });
 
     if (res?.status && res?.data) {
       const d = res.data;
       const downloads = d.downloads || [];
 
-      // Check if real video exists
-      const videoItem = downloads.find(x => x.type === 'video' || x.name?.toLowerCase().includes('video'));
-      const imageItem = downloads.find(x => x.type === 'image_direct' || x.type === 'image');
+      // වීඩියෝවක් තිබේදැයි දැඩිව පරීක්ෂා කිරීම
+      const vid = downloads.find(x => 
+        x.type === 'video' || 
+        x.name?.toLowerCase().includes('video') || 
+        x.link?.includes('.mp4')
+      );
 
-      if (videoItem?.link) {
+      if (vid && vid.link) {
         return {
           isVideo: true,
-          downloadUrl: videoItem.link,
+          downloadUrl: vid.link,
           title: d.title || 'Pinterest Video'
         };
       }
 
-      const rawImage = imageItem?.link || d.image || (d.gallery && d.gallery[0]);
-      if (rawImage) {
+      // වීඩියෝවක් නැත්නම් පමණක් Image එකක් ලෙස තෝරා ගැනීම
+      const img = downloads.find(x => x.type === 'image_direct' || x.type === 'image');
+      const fallbackImg = img?.link || d.image || (d.gallery && d.gallery[0]);
+
+      if (fallbackImg) {
         return {
           isVideo: false,
-          downloadUrl: rawImage,
+          downloadUrl: fallbackImg,
           title: d.title || 'Pinterest Image'
         };
       }
     }
   } catch (err) {
-    console.warn('Chamindu Pinterest API failed, trying Cobalt direct engine...');
+    console.warn('Chamindu API failed, trying public resolver...');
   }
 
-  // Method 2: Cobalt Public Engine (Best for Pinterest MP4 Videos)
+  // 3. Dedicated Pinterest Video Scraper Gateway
   try {
-    const cobaltRes = await axios.post('https://co.wuk.sh/api/json', {
-      url: pinUrl
-    }, {
+    const res = await axios.get(`https://pinterestdownloader.io/backend/download?url=${encodeURIComponent(fullUrl)}`, {
       headers: {
-        'Accept': 'application/json',
-        'Content-Type': 'application/json',
         'User-Agent': 'Mozilla/5.0'
       },
-      timeout: 25000
+      timeout: 20000
     });
 
-    if (cobaltRes?.data?.url) {
-      const isVid = cobaltRes.data.url.includes('.mp4') || cobaltRes.data.pickerType === 'video';
+    if (res?.data?.url) {
       return {
-        isVideo: isVid,
-        downloadUrl: cobaltRes.data.url,
-        title: 'Pinterest Media'
+        isVideo: true,
+        downloadUrl: res.data.url,
+        title: 'Pinterest Video'
       };
     }
   } catch (e) {
-    console.warn('Cobalt engine failed, trying Direct Resolver...');
-  }
-
-  // Method 3: Public Direct Scraper (All-in-one Video & Image)
-  try {
-    const api = await axios.get(`https://api.agatz.xyz/api/pinterest?url=${encodeURIComponent(pinUrl)}`, {
-      timeout: 25000
-    });
-    if (api?.data?.status === 200 && api?.data?.data) {
-      const data = api.data.data;
-      if (data.video_url || (typeof data === 'string' && data.endsWith('.mp4'))) {
-        return {
-          isVideo: true,
-          downloadUrl: data.video_url || data,
-          title: 'Pinterest Video'
-        };
-      }
-      if (data.image_url || (Array.isArray(data) && data[0])) {
-        return {
-          isVideo: false,
-          downloadUrl: data.image_url || data[0],
-          title: 'Pinterest Image'
-        };
-      }
-    }
-  } catch (e) {
-    console.error('All Pinterest downloaders failed:', e.message);
+    console.error('All engines failed:', e.message);
   }
 
   return null;
@@ -124,7 +147,7 @@ async function getPinterestData(pinUrl) {
 module.exports = {
   name: 'pinterest',
   alias: ['pt', 'pinvideo', 'pindl', 'cpvd'],
-  desc: 'Download Pinterest Video or Image directly to chat or channel',
+  desc: 'Download Pinterest Video or Image to chat or channel',
   category: 'downloader',
   run: async ({ sock, msg, jid, args, command }) => {
     try {
@@ -152,7 +175,6 @@ module.exports = {
         pinUrl = fullText || quotedText;
       }
 
-      // Pinterest Regex
       const urlMatch = pinUrl.match(/https?:\/\/(?:www\.)?(?:[a-z]{2}\.)?pinterest\.(?:com|it)\/[^\s]+|https?:\/\/pin\.it\/[^\s]+/i);
       if (!urlMatch) {
         return await sock.sendMessage(jid, { 
@@ -170,19 +192,19 @@ module.exports = {
           : '⏳ *HESHAN OFC:* Downloading Pinterest media...' 
       }, { quoted: msg });
 
-      // Fetch Direct Stream URL
-      const mediaResult = await getPinterestData(validPinUrl);
+      // Search & Extract
+      const mediaResult = await fetchPinterestMedia(validPinUrl);
 
       if (!mediaResult || !mediaResult.downloadUrl) {
         return await sock.sendMessage(jid, { 
-          text: '❌ Could not retrieve Pinterest video or image. The link might be invalid or private.' 
+          text: '❌ Could not retrieve media from this Pinterest link.' 
         }, { quoted: msg });
       }
 
       const isVideo = mediaResult.isVideo;
       const title = (mediaResult.title || 'Pinterest Media').replace(/\s+/g, ' ').trim();
 
-      // Normal Chat Caption
+      // Caption Designs
       const normalCaption = 
 `> *📌⃝✨ H E S H A N   O F C   P I N T E R E S T*
 
@@ -191,27 +213,24 @@ module.exports = {
 
 \`\`\`➥ Downloaded in Original High Quality! ✨\`\`\`
 
-> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅ ʜᴜʙ*`;
+> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`;
 
-      // Channel Caption
       const channelCaption = `${title}\n\n> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`;
 
-      // Download Stream Buffer safely
+      // Download Stream Buffer
       const fileStream = await axios({
         url: mediaResult.downloadUrl,
         method: 'GET',
         responseType: 'arraybuffer',
         timeout: 90000,
         headers: { 
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-          'Accept': '*/*'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
         }
       });
 
       const mediaBuffer = Buffer.from(fileStream.data);
 
       if (isChannelCmd) {
-        // Upload to Channel
         if (isVideo) {
           await sock.sendMessage(destinationJid, {
             video: mediaBuffer,
@@ -230,7 +249,6 @@ module.exports = {
         }, { quoted: msg });
 
       } else {
-        // Send to Normal Chat
         if (isVideo) {
           await sock.sendMessage(jid, {
             video: mediaBuffer,
