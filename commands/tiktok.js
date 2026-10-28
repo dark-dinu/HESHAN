@@ -148,8 +148,8 @@ module.exports = {
       } else {
         // .ctt: නම සහිතව
         channelCaption = cleanTitle 
-          ? `${cleanTitle}\n\n> *𝄞𝄢𝐑𝐚ප විතරමයි || 🎧🇱🇰*`
-          : `> *𝄞𝄢𝐑𝐚ප විතරමයි || 🎧🇱🇰*`;
+          ? `${cleanTitle}\n\n> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`
+          : `> *𝄞𝄢𝐑𝐚𝐩 විතරමයි || 🎧🇱🇰*`;
       }
 
       // Video Stream Buffer Download
