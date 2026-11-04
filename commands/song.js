@@ -11,11 +11,6 @@ ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 // Active Chamindu API Key
 const CHAMA_API_KEY = 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
-// Active Sessions Store
-if (!global.songSessions) {
-  global.songSessions = new Map();
-}
-
 function getDuration(filePath) {
   return new Promise((resolve) => {
     ffmpeg.ffprobe(filePath, (err, metadata) => {
@@ -52,8 +47,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
     if (dl) {
       return {
         downloadUrl: dl,
-        title: res?.title || res?.data?.title || '',
-        thumbnail: res?.thumbnail || res?.data?.thumbnail || ''
+        title: res?.title || res?.data?.title || ''
       };
     }
   } catch (err) {
@@ -67,8 +61,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
     if (dl2) {
       return {
         downloadUrl: dl2,
-        title: res2?.title || res2?.data?.title || '',
-        thumbnail: res2?.thumbnail || res2?.data?.thumbnail || ''
+        title: res2?.title || res2?.data?.title || ''
       };
     }
   } catch (e) {
@@ -80,40 +73,54 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
 
 module.exports = {
   name: 'song',
-  alias: ['play', 'sing', 'mp3'],
+  alias: ['play', 'sing', 'mp3', '1', '2', '3'],
   desc: 'Download song with selection (Audio, Document, Voice Note)',
   category: 'music',
   run: async ({ sock, msg, jid, args, command }) => {
     try {
-      const fullText = args.join(' ').trim();
-      const quotedMsgInfo = msg.message?.extendedTextMessage?.contextInfo;
-      const quotedStanzaId = quotedMsgInfo?.stanzaId;
-      const quotedText = quotedMsgInfo?.quotedMessage?.conversation ||
-                         quotedMsgInfo?.quotedMessage?.extendedTextMessage?.text || '';
+      const messageText = msg.message?.conversation || 
+                         msg.message?.extendedTextMessage?.text || '';
 
-      const senderId = msg.key.participant || msg.key.remoteJid;
+      const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+      const quotedText = quotedMsg?.conversation || 
+                         quotedMsg?.extendedTextMessage?.text || 
+                         quotedMsg?.imageMessage?.caption || '';
+
+      const input = messageText.trim();
+      const isSongCardReply = quotedText.includes('H E S H A N   O F C   M U S I C') || quotedText.includes('SELECT FORMAT');
 
       // ==========================================
-      // 1. SELECTION HANDLER (1, 2, 3 Reply)
+      // 1. අංක 1, 2, 3 REPLY එක හඳුනාගැනීම
       // ==========================================
-      const session = quotedStanzaId ? global.songSessions.get(quotedStanzaId) : null;
-      const cleanInput = fullText.trim();
+      if (isSongCardReply && (input === '1' || input === '2' || input === '3')) {
+        const choice = input;
 
-      if (session && (cleanInput === '1' || cleanInput === '2' || cleanInput === '3')) {
-        const choice = cleanInput;
-        const { targetYoutubeUrl, title, duration, author } = session;
+        // Quoted message එකෙන් Title එක ලබාගැනීම
+        const titleMatch = quotedText.match(/TITLE\s*:\s*([^\n]+)/i);
+        const songTitle = titleMatch ? titleMatch[1].trim() : 'Song';
 
         await sock.sendMessage(jid, { 
-          text: `⏳ *HESHAN OFC:* Fetching option *[${choice}]* for you...` 
+          text: `⏳ *HESHAN OFC:* Processing option *[${choice}]* for: *${songTitle}*...` 
         }, { quoted: msg });
 
-        const ytData = await fetchYouTubeDownload(targetYoutubeUrl);
-        if (!ytData?.downloadUrl) {
+        // YouTube search එකක් සිදු කර සෘජු link එක ලබා ගැනීම
+        const searchResult = await yts(songTitle);
+        if (!searchResult?.videos?.length) {
           return await sock.sendMessage(jid, { 
-            text: '❌ *Failed to generate download link from API.*' 
+            text: '❌ *Song link could not be re-resolved.* Please try searching again.' 
           }, { quoted: msg });
         }
 
+        const ytUrl = searchResult.videos[0].url;
+        const ytData = await fetchYouTubeDownload(ytUrl);
+
+        if (!ytData?.downloadUrl) {
+          return await sock.sendMessage(jid, { 
+            text: '❌ *Failed to get download stream from YouTube API.*' 
+          }, { quoted: msg });
+        }
+
+        // Audio Buffer බාගත කිරීම
         const fileResponse = await axios({
           url: ytData.downloadUrl,
           method: 'GET',
@@ -123,20 +130,20 @@ module.exports = {
         });
 
         const mediaBuffer = Buffer.from(fileResponse.data);
-        const cleanFileName = `${(ytData.title || title).replace(/[\\/:*?"<>|]/g, '')}.mp3`;
+        const cleanFileName = `${(ytData.title || songTitle).replace(/[\\/:*?"<>|]/g, '')}.mp3`;
 
-        // OPTION 1: AUDIO (Normal Audio Player)
+        // OPTION 1: Normal Audio Player
         if (choice === '1') {
-          await sock.sendMessage(jid, {
+          return await sock.sendMessage(jid, {
             audio: mediaBuffer,
             mimetype: 'audio/mpeg',
             ptt: false
           }, { quoted: msg });
         }
 
-        // OPTION 2: DOCUMENT (Save to Files)
-        else if (choice === '2') {
-          await sock.sendMessage(jid, {
+        // OPTION 2: Document (Save File)
+        if (choice === '2') {
+          return await sock.sendMessage(jid, {
             document: mediaBuffer,
             mimetype: 'audio/mpeg',
             fileName: cleanFileName,
@@ -144,8 +151,8 @@ module.exports = {
           }, { quoted: msg });
         }
 
-        // OPTION 3: VOICE NOTE (Playable Opus PTT)
-        else if (choice === '3') {
+        // OPTION 3: Voice Note (Opus PTT)
+        if (choice === '3') {
           const tempDir = os.tmpdir();
           const tempInput = path.join(tempDir, `raw_${Date.now()}.bin`);
           const tempOutput = path.join(tempDir, `vn_${Date.now()}.ogg`);
@@ -162,7 +169,7 @@ module.exports = {
 
             const opusBuffer = fs.readFileSync(tempOutput);
 
-            await sock.sendMessage(jid, {
+            return await sock.sendMessage(jid, {
               audio: opusBuffer,
               mimetype: 'audio/ogg; codecs=opus',
               ptt: true,
@@ -174,20 +181,16 @@ module.exports = {
             if (fs.existsSync(tempOutput)) fs.unlinkSync(tempOutput);
           }
         }
-
-        // Remove active session
-        global.songSessions.delete(quotedStanzaId);
-        return;
       }
 
       // ==========================================
-      // 2. SEARCH & DISPLAY OPTIONS
+      // 2. SONG සර්ච් කර CARD එක යැවීම
       // ==========================================
-      const query = fullText || quotedText;
+      const query = args.join(' ').trim() || quotedText;
 
-      if (!query) {
+      if (!query || input === '1' || input === '2' || input === '3') {
         return await sock.sendMessage(jid, { 
-          text: `⚠️ *How to use:*\n\n• \`.song <Song Name or YouTube Link>\`\n• Example: \`.song Ma Diha\`` 
+          text: `⚠️ *How to use:*\n\n• \`.song <Song Name or YouTube Link>\`\n• Example: \`.song Lelena\`` 
         }, { quoted: msg });
       }
 
@@ -207,7 +210,7 @@ module.exports = {
         const searchResult = await yts(query);
         if (!searchResult?.videos?.length) {
           return await sock.sendMessage(jid, { 
-            text: '❌ *Song not found on YouTube.* Please check the spelling.' 
+            text: '❌ *Song not found on YouTube.* Please check spelling.' 
           }, { quoted: msg });
         }
         const video = searchResult.videos[0];
@@ -218,53 +221,35 @@ module.exports = {
         searchedAuthor = video.author?.name || 'Unknown Artist';
       }
 
-      // Selection Menu Card Design
       const menuCaption = 
 `> *🎵⃝✨ H E S H A N   O F C   M U S I C*
 
-*❖ ᴛɪᴛʟᴇ :* ${searchedTitle}
-*❖ ᴀʀᴛɪsᴛ :* ${searchedAuthor}
-*❖ ᴅᴜʀᴀᴛɪᴏɴ :* ${searchedDuration}
+*❖ TITLE :* ${searchedTitle}
+*❖ ARTIST :* ${searchedAuthor}
+*❖ DURATION :* ${searchedDuration}
 
 01:23 ───🔘──────── ${searchedDuration}
 ⇄     ◁   ❚❚   ▷     ↻
 
-*╭━━━〔 SELECT FORMAT 〕━━━╮*
+╭━━━〔 SELECT FORMAT 〕━━━╮
 ┃
-┃  *1* ➯ *Audio File* 🎧
-┃  *2* ➯ *Document File* 📁
-┃  *3* ➯ *Voice Note (PTT)* 🎙️
+┃ 1 ➯ Audio File 🎧
+┃ 2 ➯ Document File 📁
+┃ 3 ➯ Voice Note (PTT) 🎙️
 ┃
-*╰━━━━━━━━━━━━━━━━━━━━━━╯*
+╰━━━━━━━━━━━━━━━━━━━━━━╯
 
-\`\`\`➥ Reply to this message with 1, 2, or 3 to download!\`\`\`
+➥ Reply to this message with 1, 2, or 3 to download!
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴜsɪᴄ ʜᴜʙ*`;
 
-      const sentMsg = await sock.sendMessage(jid, {
+      await sock.sendMessage(jid, {
         image: { url: searchedThumbnail || 'https://i.imgur.com/8Q8ZQ8Z.png' },
         caption: menuCaption
       }, { quoted: msg });
 
-      // Save session with Message Stanza ID
-      const sentStanzaId = sentMsg.key.id;
-      global.songSessions.set(sentStanzaId, {
-        targetYoutubeUrl,
-        title: searchedTitle,
-        duration: searchedDuration,
-        author: searchedAuthor,
-        time: Date.now()
-      });
-
-      // Session auto delete after 5 minutes
-      setTimeout(() => {
-        if (global.songSessions.has(sentStanzaId)) {
-          global.songSessions.delete(sentStanzaId);
-        }
-      }, 300000);
-
     } catch (error) {
-      console.error('Song Downloader Error:', error);
+      console.error('Song Command Error:', error);
       await sock.sendMessage(jid, { 
         text: `❌ *An error occurred:* ${error.message}` 
       }, { quoted: msg });
