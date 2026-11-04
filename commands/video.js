@@ -3,7 +3,6 @@ const yts = require('yt-search');
 
 const CHAMA_API_KEY = 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
-// Quality Map
 const QUALITY_MAP = {
   '1': '360p',
   '2': '480p',
@@ -25,7 +24,6 @@ async function fetchYouTubeVideoDownload(targetYoutubeUrl, quality = '720p') {
     }
   } catch (err) {}
 
-  // Fallback Quality (720p -> 360p)
   try {
     const fallbackUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=360p&format=mp4&api_key=${CHAMA_API_KEY}`;
     const { data: res2 } = await axios.get(fallbackUrl, { timeout: 45000 });
@@ -47,81 +45,65 @@ module.exports = {
   alias: ['ytv', 'ytvideo', 'mp4'],
   desc: 'Download YouTube video with quality selection',
   category: 'downloader',
-  run: async ({ sock, msg, jid, args, text, reply }) => {
-    try {
-      const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-      const quotedCaption = quotedMsg?.imageMessage?.caption || 
-                            quotedMsg?.conversation || 
-                            quotedMsg?.extendedTextMessage?.text || '';
 
-      const isReply = ['1', '2', '3', '4'].includes(text?.trim());
-      const isVideoCard = quotedCaption.includes('H E S H A N   O F C   V I D E O') || quotedCaption.includes('SELECT QUALITY');
+  // 1, 2, 3, 4 Reply Handling
+  onReply: async ({ sock, msg, jid, text, quotedText }) => {
+    const isVideoCard = quotedText.includes('H E S H A N   O F C   V I D E O') || quotedText.includes('SELECT QUALITY');
+    const isValidChoice = ['1', '2', '3', '4'].includes(text.trim());
 
-      // ==========================================
-      // 1. අංක 1, 2, 3, 4 REPLY කළ විට VIDEO එක එවීමේ කොටස
-      // ==========================================
-      if (isReply && isVideoCard) {
-        const choice = text.trim();
-        const selectedQuality = QUALITY_MAP[choice] || '720p';
+    if (!isVideoCard || !isValidChoice) return false;
 
-        // Title එක Card Caption එකෙන් ලබාගැනීම
-        const titleMatch = quotedCaption.match(/TITLE\s*:\s*([^\n]+)/i);
-        const videoTitle = titleMatch ? titleMatch[1].trim() : 'Video';
+    const choice = text.trim();
+    const selectedQuality = QUALITY_MAP[choice] || '720p';
+    const titleMatch = quotedText.match(/TITLE\s*:\s*([^\n]+)/i);
+    const videoTitle = titleMatch ? titleMatch[1].trim() : 'Video';
 
-        // Processing Reaction
-        await sock.sendMessage(jid, { react: { text: '⏳', key: msg.key } });
+    await sock.sendMessage(jid, { react: { text: '⏳', key: msg.key } });
 
-        const searchResult = await yts(videoTitle);
-        if (!searchResult?.videos?.length) {
-          await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
-          return;
-        }
+    const searchResult = await yts(videoTitle);
+    if (!searchResult?.videos?.length) {
+      await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
+      return true;
+    }
 
-        const ytUrl = searchResult.videos[0].url;
-        const ytData = await fetchYouTubeVideoDownload(ytUrl, selectedQuality);
+    const ytData = await fetchYouTubeVideoDownload(searchResult.videos[0].url, selectedQuality);
+    if (!ytData?.downloadUrl) {
+      await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
+      return true;
+    }
 
-        if (!ytData?.downloadUrl) {
-          await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
-          return;
-        }
+    const fileResponse = await axios({
+      url: ytData.downloadUrl,
+      method: 'GET',
+      responseType: 'arraybuffer',
+      timeout: 180000,
+      headers: { 'User-Agent': 'Mozilla/5.0' }
+    });
 
-        // Buffer Stream Download
-        const fileResponse = await axios({
-          url: ytData.downloadUrl,
-          method: 'GET',
-          responseType: 'arraybuffer',
-          timeout: 180000,
-          headers: { 'User-Agent': 'Mozilla/5.0' }
-        });
+    const videoBuffer = Buffer.from(fileResponse.data);
 
-        const videoBuffer = Buffer.from(fileResponse.data);
-
-        // Video එක යැවීම
-        await sock.sendMessage(jid, {
-          video: videoBuffer,
-          mimetype: 'video/mp4',
-          caption: 
+    await sock.sendMessage(jid, {
+      video: videoBuffer,
+      mimetype: 'video/mp4',
+      caption: 
 `> *🎬⃝✨ H E S H A N   O F C   V I D E O*
 
 *❖ ᴛɪᴛʟᴇ :* ${ytData.title || videoTitle}
 *❖ ǫᴜᴀʟɪᴛʏ :* ${ytData.quality}
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`
-        }, { quoted: msg });
+    }, { quoted: msg });
 
-        // Success Reaction
-        return await sock.sendMessage(jid, { react: { text: '✅', key: msg.key } });
-      }
+    await sock.sendMessage(jid, { react: { text: '✅', key: msg.key } });
+    return true;
+  },
 
-      // ==========================================
-      // 2. .VIDEO විධානය දුන් විට CARD එක යැවීම
-      // ==========================================
+  // Normal Command Execution
+  run: async ({ sock, msg, jid, args, reply }) => {
+    try {
       const query = args.join(' ').trim();
-      if (!query) {
-        return reply('⚠️ *Usage:* `.video <Video Name or YouTube Link>`\n*Example:* `.video Lelena`');
-      }
+      if (!query) return reply('⚠️ *Usage:* `.video <Video Name>`\n*Example:* `.video Lelena`');
 
-      // Initial Command Reaction (කිසිදු අනවශ්‍ය text එකක් නොයයි)
       await sock.sendMessage(jid, { react: { text: '🎬', key: msg.key } });
 
       let targetYoutubeUrl = query;
@@ -131,7 +113,6 @@ module.exports = {
       let searchedAuthor = 'Unknown Channel';
 
       const isYoutubeUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(query);
-
       if (!isYoutubeUrl) {
         const searchResult = await yts(query);
         if (!searchResult?.videos?.length) {
