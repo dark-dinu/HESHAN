@@ -73,7 +73,7 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
 
 module.exports = {
   name: 'song',
-  alias: ['play', 'sing', 'mp3', '1', '2', '3'],
+  alias: ['play', 'sing', 'mp3', '1', '2', '3', '.1', '.2', '.3'],
   desc: 'Download song with selection (Audio, Document, Voice Note)',
   category: 'music',
   run: async ({ sock, msg, jid, args, command }) => {
@@ -82,32 +82,34 @@ module.exports = {
                          msg.message?.extendedTextMessage?.text || '';
 
       const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-      const quotedText = quotedMsg?.conversation || 
-                         quotedMsg?.extendedTextMessage?.text || 
-                         quotedMsg?.imageMessage?.caption || '';
+      const quotedText = quotedMsg?.imageMessage?.caption || 
+                         quotedMsg?.conversation || 
+                         quotedMsg?.extendedTextMessage?.text || '';
 
-      const input = messageText.trim();
+      const cmdUsed = (command || messageText.trim().split(/\s+/)[0].slice(1)).toLowerCase();
+      const rawInput = messageText.replace(/^[./#!]/, '').trim();
+
       const isSongCardReply = quotedText.includes('H E S H A N   O F C   M U S I C') || quotedText.includes('SELECT FORMAT');
+      const isNumberChoice = ['1', '2', '3'].includes(rawInput) || ['1', '2', '3'].includes(cmdUsed);
 
       // ==========================================
-      // 1. අංක 1, 2, 3 REPLY එක හඳුනාගැනීම
+      // 1. FORMAT SELECTION EXECUTION (1, 2, 3)
       // ==========================================
-      if (isSongCardReply && (input === '1' || input === '2' || input === '3')) {
-        const choice = input;
+      if (isSongCardReply && isNumberChoice) {
+        const choice = ['1', '2', '3'].includes(cmdUsed) ? cmdUsed : rawInput;
 
-        // Quoted message එකෙන් Title එක ලබාගැනීම
+        // Title එක Card Caption එකෙන් extract කරගැනීම
         const titleMatch = quotedText.match(/TITLE\s*:\s*([^\n]+)/i);
         const songTitle = titleMatch ? titleMatch[1].trim() : 'Song';
 
         await sock.sendMessage(jid, { 
-          text: `⏳ *HESHAN OFC:* Processing option *[${choice}]* for: *${songTitle}*...` 
+          text: `⏳ *HESHAN OFC:* Processing option *[${choice}]* for *${songTitle}*...` 
         }, { quoted: msg });
 
-        // YouTube search එකක් සිදු කර සෘජු link එක ලබා ගැනීම
         const searchResult = await yts(songTitle);
         if (!searchResult?.videos?.length) {
           return await sock.sendMessage(jid, { 
-            text: '❌ *Song link could not be re-resolved.* Please try searching again.' 
+            text: '❌ *Song link could not be re-resolved.* Please search again.' 
           }, { quoted: msg });
         }
 
@@ -120,7 +122,6 @@ module.exports = {
           }, { quoted: msg });
         }
 
-        // Audio Buffer බාගත කිරීම
         const fileResponse = await axios({
           url: ytData.downloadUrl,
           method: 'GET',
@@ -132,7 +133,7 @@ module.exports = {
         const mediaBuffer = Buffer.from(fileResponse.data);
         const cleanFileName = `${(ytData.title || songTitle).replace(/[\\/:*?"<>|]/g, '')}.mp3`;
 
-        // OPTION 1: Normal Audio Player
+        // 1. Audio File (Play in chat)
         if (choice === '1') {
           return await sock.sendMessage(jid, {
             audio: mediaBuffer,
@@ -141,7 +142,7 @@ module.exports = {
           }, { quoted: msg });
         }
 
-        // OPTION 2: Document (Save File)
+        // 2. Document File (Save to device)
         if (choice === '2') {
           return await sock.sendMessage(jid, {
             document: mediaBuffer,
@@ -151,7 +152,7 @@ module.exports = {
           }, { quoted: msg });
         }
 
-        // OPTION 3: Voice Note (Opus PTT)
+        // 3. Voice Note (PTT with waveform)
         if (choice === '3') {
           const tempDir = os.tmpdir();
           const tempInput = path.join(tempDir, `raw_${Date.now()}.bin`);
@@ -184,13 +185,13 @@ module.exports = {
       }
 
       // ==========================================
-      // 2. SONG සර්ච් කර CARD එක යැවීම
+      // 2. SONG CARD GENERATOR
       // ==========================================
-      const query = args.join(' ').trim() || quotedText;
+      const query = args.join(' ').trim();
 
-      if (!query || input === '1' || input === '2' || input === '3') {
+      if (!query || isNumberChoice) {
         return await sock.sendMessage(jid, { 
-          text: `⚠️ *How to use:*\n\n• \`.song <Song Name or YouTube Link>\`\n• Example: \`.song Lelena\`` 
+          text: `⚠️ *How to use:*\n\n• \`.song <Song Name>\`\n• Example: \`.song Lelena\`` 
         }, { quoted: msg });
       }
 
@@ -239,7 +240,7 @@ module.exports = {
 ┃
 ╰━━━━━━━━━━━━━━━━━━━━━━╯
 
-➥ Reply to this message with 1, 2, or 3 to download!
+➥ Reply with *1*, *2*, or *3* (or *.1*, *.2*, *.3*) to download!
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴜsɪᴄ ʜᴜʙ*`;
 
