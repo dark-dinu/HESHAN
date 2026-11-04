@@ -19,32 +19,26 @@ module.exports = {
   alias: ['help', 'list', 'commands'],
   desc: 'Display clean interactive categorized menu',
   category: 'general',
-  run: async ({ sock, msg, jid, text, args, prefix = '.', commands }) => {
-    try {
-      const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-      const quotedCaption = quotedMsg?.imageMessage?.caption || 
-                            quotedMsg?.conversation || 
-                            quotedMsg?.extendedTextMessage?.text || '';
 
-      const isReply = ['1', '2', '3', '4', '5'].includes(text?.trim());
-      const isMenuCard = quotedCaption.includes('HESHAN OFC') && (quotedCaption.includes('MAIN DASHBOARD') || quotedCaption.includes('SELECT MENU'));
+  // 1 - 5 Menu Category Reply Handling
+  onReply: async ({ sock, msg, jid, text, quotedText, prefix = '.' }) => {
+    const isMenuCard = quotedText.includes('HESHAN OFC') && (quotedText.includes('MAIN DASHBOARD') || quotedText.includes('SELECT MENU'));
+    const isValidChoice = ['1', '2', '3', '4', '5'].includes(text.trim());
 
-      const logoBuffer = getBotLogo();
-      const imagePayload = logoBuffer ? logoBuffer : { url: 'https://i.imgur.com/8Q8ZQ8Z.png' };
+    if (!isMenuCard || !isValidChoice) return false;
 
-      // ==========================================
-      // 1. SUB-CATEGORY MENUS (1, 2, 3, 4, 5)
-      // ==========================================
-      if (isReply && isMenuCard) {
-        const choice = text.trim();
-        await sock.sendMessage(jid, { react: { text: '⚡', key: msg.key } });
+    const choice = text.trim();
+    await sock.sendMessage(jid, { react: { text: '⚡', key: msg.key } });
 
-        let categoryTitle = '';
-        let cmdList = '';
+    const logoBuffer = getBotLogo();
+    const imagePayload = logoBuffer ? logoBuffer : { url: 'https://i.imgur.com/8Q8ZQ8Z.png' };
 
-        if (choice === '1') {
-          categoryTitle = 'DOWNLOADERS';
-          cmdList = 
+    let categoryTitle = '';
+    let cmdList = '';
+
+    if (choice === '1') {
+      categoryTitle = 'DOWNLOADERS';
+      cmdList = 
 `┌───〔 ${categoryTitle} 〕
 │
 ├▸ *${prefix}song* <query>
@@ -63,10 +57,10 @@ module.exports = {
 │  └ Pin Videos & Photos
 │
 └────────────···▸`;
-        } 
-        else if (choice === '2') {
-          categoryTitle = 'CHANNELS';
-          cmdList = 
+    } 
+    else if (choice === '2') {
+      categoryTitle = 'CHANNELS';
+      cmdList = 
 `┌───〔 ${categoryTitle} 〕
 │
 ├▸ *${prefix}csong* <link>
@@ -79,10 +73,10 @@ module.exports = {
 │  └ Post Pinterest Media
 │
 └────────────···▸`;
-        } 
-        else if (choice === '3') {
-          categoryTitle = 'PROFILE TOOLS';
-          cmdList = 
+    } 
+    else if (choice === '3') {
+      categoryTitle = 'PROFILE TOOLS';
+      cmdList = 
 `┌───〔 ${categoryTitle} 〕
 │
 ├▸ *${prefix}getdp*
@@ -95,10 +89,10 @@ module.exports = {
 │  └ Update Bot Profile DP
 │
 └────────────···▸`;
-        } 
-        else if (choice === '4') {
-          categoryTitle = 'SYSTEM STATS';
-          cmdList = 
+    } 
+    else if (choice === '4') {
+      categoryTitle = 'SYSTEM STATS';
+      cmdList = 
 `┌───〔 ${categoryTitle} 〕
 │
 ├▸ *${prefix}alive*
@@ -108,10 +102,10 @@ module.exports = {
 │  └ Open Main Dashboard
 │
 └────────────···▸`;
-        } 
-        else if (choice === '5') {
-          categoryTitle = 'ALL COMMANDS';
-          cmdList = 
+    } 
+    else if (choice === '5') {
+      categoryTitle = 'ALL COMMANDS';
+      cmdList = 
 `┌───〔 ${categoryTitle} 〕
 │
 ├▸ *Media:* song, video, ytv
@@ -121,9 +115,9 @@ module.exports = {
 ├▸ *Core:* alive, menu
 │
 └────────────···▸`;
-        }
+    }
 
-        const subMenuCaption = 
+    const subMenuCaption = 
 `> *⚡ HESHAN OFC MD*
 
 ${cmdList}
@@ -132,17 +126,21 @@ ${cmdList}
 
 > *Media Automation Engine*`;
 
-        return await sock.sendMessage(jid, {
-          image: imagePayload,
-          caption: subMenuCaption
-        }, { quoted: msg });
-      }
+    await sock.sendMessage(jid, {
+      image: imagePayload,
+      caption: subMenuCaption
+    }, { quoted: msg });
 
-      // ==========================================
-      // 2. MAIN DASHBOARD CARD
-      // ==========================================
+    return true;
+  },
+
+  // Normal Command Execution
+  run: async ({ sock, msg, jid, prefix = '.', commands }) => {
+    try {
       await sock.sendMessage(jid, { react: { text: '📜', key: msg.key } });
 
+      const logoBuffer = getBotLogo();
+      const imagePayload = logoBuffer ? logoBuffer : { url: 'https://i.imgur.com/8Q8ZQ8Z.png' };
       const totalCmds = commands ? commands.size : '12';
 
       const mainDashboardCaption = 
@@ -167,7 +165,7 @@ ${cmdList}
 
 \`\`\`Reply with a number (1 - 5)\`\`\`
 
-> *Media Automation Engine*`;
+> *ʜᴇꜱʜᴀɴ ᴏꜰᴄ ʙᴏᴛ*`;
 
       await sock.sendMessage(jid, {
         image: imagePayload,
