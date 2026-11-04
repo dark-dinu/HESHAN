@@ -17,7 +17,7 @@ function getBotLogo() {
 module.exports = {
   name: 'menu',
   alias: ['help', 'list', 'commands'],
-  desc: 'Display interactive categorized menu',
+  desc: 'Display clean interactive categorized menu',
   category: 'general',
   run: async ({ sock, msg, jid, text, args, prefix = '.', commands }) => {
     try {
@@ -27,120 +27,151 @@ module.exports = {
                             quotedMsg?.extendedTextMessage?.text || '';
 
       const isReply = ['1', '2', '3', '4', '5'].includes(text?.trim());
-      const isMenuCard = quotedCaption.includes('H E S H A N   O F C   M E N U') || quotedCaption.includes('SELECT CATEGORY');
+      const isMenuCard = quotedCaption.includes('HESHAN OFC') && (quotedCaption.includes('MAIN DASHBOARD') || quotedCaption.includes('SELECT MENU'));
 
       const logoBuffer = getBotLogo();
       const imagePayload = logoBuffer ? logoBuffer : { url: 'https://i.imgur.com/8Q8ZQ8Z.png' };
 
       // ==========================================
-      // 1. අංක 1 - 5 REPLY කළ විට අදාළ CATEGORY එක පෙන්වීම
+      // 1. SUB-CATEGORY MENUS (1, 2, 3, 4, 5)
       // ==========================================
       if (isReply && isMenuCard) {
         const choice = text.trim();
         await sock.sendMessage(jid, { react: { text: '⚡', key: msg.key } });
 
         let categoryTitle = '';
-        let categoryCommands = '';
+        let cmdList = '';
 
         if (choice === '1') {
-          categoryTitle = 'DOWNLOADER COMMANDS 📥';
-          categoryCommands = 
-`┃  *• ${prefix}song* <name> ➯ Download MP3 / Doc / Voice
-┃  *• ${prefix}csong* <name> ➯ Download Song to Channel
-┃  *• ${prefix}video* <name> ➯ Download Video with Quality
-┃  *• ${prefix}ytv* <url> ➯ Direct YouTube MP4
-┃  *• ${prefix}cytv* <url> ➯ YouTube Video to Channel
-┃  *• ${prefix}tiktok* <url> ➯ Download TikTok No WM
-┃  *• ${prefix}pinterest* <url> ➯ Download Pin Video/Image
-┃  *• ${prefix}cpvd* <url> ➯ Pin Media to Channel`;
+          categoryTitle = 'DOWNLOADERS';
+          cmdList = 
+`┌───〔 ${categoryTitle} 〕
+│
+├▸ *${prefix}song* <query>
+│  └ Multi-format Song DL
+│
+├▸ *${prefix}video* <query>
+│  └ MP4 Video with Qualities
+│
+├▸ *${prefix}ytv* <link>
+│  └ Direct YouTube Stream
+│
+├▸ *${prefix}tiktok* <link>
+│  └ TikTok No Watermark
+│
+├▸ *${prefix}pinterest* <link>
+│  └ Pin Videos & Photos
+│
+└────────────···▸`;
         } 
         else if (choice === '2') {
-          categoryTitle = 'CHANNEL AUTOMATION 📢';
-          categoryCommands = 
-`┃  *• ${prefix}csong* ➯ Post song cards to Channel
-┃  *• ${prefix}cytv* ➯ Stream YouTube videos to Channel
-┃  *• ${prefix}cpvd* ➯ Post Pinterest media to Channel
-┃  *• ${prefix}cpost* ➯ Send styled announcement`;
+          categoryTitle = 'CHANNELS';
+          cmdList = 
+`┌───〔 ${categoryTitle} 〕
+│
+├▸ *${prefix}csong* <link>
+│  └ Post Song to Channel
+│
+├▸ *${prefix}cytv* <link>
+│  └ Post Video to Channel
+│
+├▸ *${prefix}cpvd* <link>
+│  └ Post Pinterest Media
+│
+└────────────···▸`;
         } 
         else if (choice === '3') {
-          categoryTitle = 'PROFILE & TOOLS 👤';
-          categoryCommands = 
-`┃  *• ${prefix}getdp* ➯ Get your own HD Profile Picture
-┃  *• ${prefix}getdp* <num/@> ➯ Get target user's DP
-┃  *• ${prefix}setdp* ➯ Reply to image to set bot DP`;
+          categoryTitle = 'PROFILE TOOLS';
+          cmdList = 
+`┌───〔 ${categoryTitle} 〕
+│
+├▸ *${prefix}getdp*
+│  └ Fetch HD Profile DP
+│
+├▸ *${prefix}getdp* <num/@>
+│  └ Fetch Target User DP
+│
+├▸ *${prefix}setdp* (reply img)
+│  └ Update Bot Profile DP
+│
+└────────────···▸`;
         } 
         else if (choice === '4') {
-          categoryTitle = 'SYSTEM & GENERAL ⚙️';
-          categoryCommands = 
-`┃  *• ${prefix}alive* ➯ Bot status, uptime & memory
-┃  *• ${prefix}menu* ➯ Open command dashboard
-┃  *• ${prefix}ping* ➯ Check bot response speed`;
+          categoryTitle = 'SYSTEM STATS';
+          cmdList = 
+`┌───〔 ${categoryTitle} 〕
+│
+├▸ *${prefix}alive*
+│  └ System Status & Uptime
+│
+├▸ *${prefix}menu*
+│  └ Open Main Dashboard
+│
+└────────────···▸`;
         } 
         else if (choice === '5') {
-          categoryTitle = 'ALL COMMANDS OVERVIEW 📋';
-          categoryCommands = 
-`┃  *• ${prefix}song*      *• ${prefix}video*
-┃  *• ${prefix}csong*     *• ${prefix}ytv*
-┃  *• ${prefix}tiktok*    *• ${prefix}pinterest*
-┃  *• ${prefix}getdp*     *• ${prefix}setdp*
-┃  *• ${prefix}alive*     *• ${prefix}menu*`;
+          categoryTitle = 'ALL COMMANDS';
+          cmdList = 
+`┌───〔 ${categoryTitle} 〕
+│
+├▸ *Media:* song, video, ytv
+├▸ *Social:* tiktok, pinterest
+├▸ *Channel:* csong, cytv, cpvd
+├▸ *Profile:* getdp, setdp
+├▸ *Core:* alive, menu
+│
+└────────────···▸`;
         }
 
-        const catCaption = 
-`> *📂⃝✨ H E S H A N   O F C   C A T E G O R Y*
+        const subMenuCaption = 
+`> *⚡ HESHAN OFC MD*
 
-*╭━━━〔 ${categoryTitle} 〕━━━╮*
-┃
-${categoryCommands}
-┃
-*╰━━━━━━━━━━━━━━━━━━━━━━╯*
+${cmdList}
 
-\`\`\`➥ Prefix: [ ${prefix} ] | HESHAN OFC MD\`\`\`
+\`\`\`Mode: Multi-Device | Prefix: [ ${prefix} ]\`\`\`
 
-> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`;
+> *Media Automation Engine*`;
 
         return await sock.sendMessage(jid, {
           image: imagePayload,
-          caption: catCaption
+          caption: subMenuCaption
         }, { quoted: msg });
       }
 
       // ==========================================
-      // 2. .MENU ගැසූ විට MAIN CATEGORY CARD එක යැවීම
+      // 2. MAIN DASHBOARD CARD
       // ==========================================
       await sock.sendMessage(jid, { react: { text: '📜', key: msg.key } });
 
-      const totalCmds = commands ? commands.size : '12+';
+      const totalCmds = commands ? commands.size : '12';
 
-      const mainCaption = 
-`> *📜⃝✨ H E S H A N   O F C   M E N U*
+      const mainDashboardCaption = 
+`> *⚡ HESHAN OFC MD*
 
-*╭━━━〔 BOT OVERVIEW 〕━━━╮*
-┃
-┃  *❖ ʙᴏᴛ :* HESHAN OFC MD
-┃  *❖ ᴘʀᴇғɪx :* [ ${prefix} ]
-┃  *❖ sᴛᴀᴛᴜs :* Online 🟢
-┃  *❖ ᴄᴏᴍᴍᴀɴᴅs :* ${totalCmds} Active
-┃
-*╰━━━━━━━━━━━━━━━━━━━━━━╯*
+┌───〔 MAIN DASHBOARD 〕
+│
+├ ✦ *Owner:* Dinidu Heshan
+├ ✦ *Prefix:* [ ${prefix} ]
+├ ✦ *Status:* Online 🟢
+├ ✦ *Commands:* ${totalCmds} Active
+│
+└───〔 SELECT MENU 〕
+│
+├ [1] 📥 Downloaders
+├ [2] 📢 Channel Tools
+├ [3] 👤 Profile Tools
+├ [4] ⚙️ System Stats
+├ [5] 📋 Full Command List
+│
+└────────────···▸
 
-*╭━━━〔 SELECT CATEGORY 〕━━━╮*
-┃
-┃  *1* ➯ *Downloaders* 📥
-┃  *2* ➯ *Channel Tools* 📢
-┃  *3* ➯ *Profile & Media* 👤
-┃  *4* ➯ *System & Status* ⚙️
-┃  *5* ➯ *All Commands List* 📋
-┃
-*╰━━━━━━━━━━━━━━━━━━━━━━╯*
+\`\`\`Reply with a number (1 - 5)\`\`\`
 
-\`\`\`➥ Reply to this message with 1, 2, 3, 4, or 5 to view commands!\`\`\`
-
-> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴜʟᴛɪ-ᴅᴇᴠɪᴄᴇ ʙᴏᴛ*`;
+> *Media Automation Engine*`;
 
       await sock.sendMessage(jid, {
         image: imagePayload,
-        caption: mainCaption
+        caption: mainDashboardCaption
       }, { quoted: msg });
 
     } catch (error) {
