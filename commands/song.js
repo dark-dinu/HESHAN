@@ -8,7 +8,6 @@ const os = require('os');
 
 ffmpeg.setFfmpegPath(ffmpegInstaller.path);
 
-// Active Chamindu API Key
 const CHAMA_API_KEY = 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
 function getDuration(filePath) {
@@ -29,10 +28,7 @@ function convertToOpus(inputPath, outputPath) {
       .audioFrequency(48000)
       .audioBitrate('64k')
       .format('ogg')
-      .outputOptions([
-        '-avoid_negative_ts make_zero',
-        '-map_metadata -1'
-      ])
+      .outputOptions(['-avoid_negative_ts make_zero', '-map_metadata -1'])
       .on('end', () => resolve(outputPath))
       .on('error', (err) => reject(err))
       .save(outputPath);
@@ -44,134 +40,78 @@ async function fetchYouTubeDownload(targetYoutubeUrl) {
     const directUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=128k&format=mp3&api_key=${CHAMA_API_KEY}`;
     const { data: res } = await axios.get(directUrl, { timeout: 45000 });
     const dl = res?.download_url || res?.data?.download_url || res?.result?.download_url;
-    if (dl) {
-      return {
-        downloadUrl: dl,
-        title: res?.title || res?.data?.title || ''
-      };
-    }
-  } catch (err) {
-    console.warn('Direct MP3 fetch failed, trying MP4 format...');
-  }
+    if (dl) return { downloadUrl: dl, title: res?.title || res?.data?.title || '' };
+  } catch (err) {}
 
   try {
     const videoUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=360p&format=mp4&api_key=${CHAMA_API_KEY}`;
     const { data: res2 } = await axios.get(videoUrl, { timeout: 45000 });
     const dl2 = res2?.download_url || res2?.data?.download_url || res2?.result?.download_url;
-    if (dl2) {
-      return {
-        downloadUrl: dl2,
-        title: res2?.title || res2?.data?.title || ''
-      };
-    }
-  } catch (e) {
-    console.error('YouTube API Error:', e.message);
-  }
+    if (dl2) return { downloadUrl: dl2, title: res2?.title || res2?.data?.title || '' };
+  } catch (e) {}
 
   return null;
 }
 
 module.exports = {
   name: 'song',
-  alias: ['play', 'sing', 'mp3', '1', '2', '3', '.1', '.2', '.3'],
+  alias: ['play', 'sing', 'mp3'],
   desc: 'Download song with selection (Audio, Document, Voice Note)',
   category: 'music',
-  run: async ({ sock, msg, jid, args, command }) => {
+  run: async ({ sock, msg, jid, args, text, reply }) => {
     try {
-      const messageText = msg.message?.conversation || 
-                         msg.message?.extendedTextMessage?.text || '';
-
       const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
-      const quotedText = quotedMsg?.imageMessage?.caption || 
-                         quotedMsg?.conversation || 
-                         quotedMsg?.extendedTextMessage?.text || '';
+      const quotedCaption = quotedMsg?.imageMessage?.caption || 
+                            quotedMsg?.conversation || 
+                            quotedMsg?.extendedTextMessage?.text || '';
 
-      const cmdUsed = (command || messageText.trim().split(/\s+/)[0].slice(1)).toLowerCase();
-      const rawInput = messageText.replace(/^[./#!]/, '').trim();
-
-      const isSongCardReply = quotedText.includes('H E S H A N   O F C   M U S I C') || quotedText.includes('SELECT FORMAT');
-      const isNumberChoice = ['1', '2', '3'].includes(rawInput) || ['1', '2', '3'].includes(cmdUsed);
+      const isReply = ['1', '2', '3'].includes(text?.trim());
+      const isSongCard = quotedCaption.includes('H E S H A N   O F C   M U S I C') || quotedCaption.includes('SELECT FORMAT');
 
       // ==========================================
-      // 1. FORMAT SELECTION EXECUTION (1, 2, 3)
+      // 1. EXECUTE DOWNLOAD ON 1, 2, 3 REPLY
       // ==========================================
-      if (isSongCardReply && isNumberChoice) {
-        const choice = ['1', '2', '3'].includes(cmdUsed) ? cmdUsed : rawInput;
-
-        // Title එක Card Caption එකෙන් extract කරගැනීම
-        const titleMatch = quotedText.match(/TITLE\s*:\s*([^\n]+)/i);
+      if (isReply && isSongCard) {
+        const choice = text.trim();
+        const titleMatch = quotedCaption.match(/TITLE\s*:\s*([^\n]+)/i);
         const songTitle = titleMatch ? titleMatch[1].trim() : 'Song';
 
-        await sock.sendMessage(jid, { 
-          text: `⏳ *HESHAN OFC:* Processing option *[${choice}]* for *${songTitle}*...` 
-        }, { quoted: msg });
+        await reply(`⏳ *HESHAN OFC:* Fetching option *[${choice}]* for: *${songTitle}*...`);
 
         const searchResult = await yts(songTitle);
-        if (!searchResult?.videos?.length) {
-          return await sock.sendMessage(jid, { 
-            text: '❌ *Song link could not be re-resolved.* Please search again.' 
-          }, { quoted: msg });
-        }
+        if (!searchResult?.videos?.length) return reply('❌ *Song link could not be re-resolved.*');
 
-        const ytUrl = searchResult.videos[0].url;
-        const ytData = await fetchYouTubeDownload(ytUrl);
-
-        if (!ytData?.downloadUrl) {
-          return await sock.sendMessage(jid, { 
-            text: '❌ *Failed to get download stream from YouTube API.*' 
-          }, { quoted: msg });
-        }
+        const ytData = await fetchYouTubeDownload(searchResult.videos[0].url);
+        if (!ytData?.downloadUrl) return reply('❌ *Failed to get download stream from YouTube API.*');
 
         const fileResponse = await axios({
           url: ytData.downloadUrl,
           method: 'GET',
           responseType: 'arraybuffer',
           timeout: 120000,
-          headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
+          headers: { 'User-Agent': 'Mozilla/5.0' }
         });
 
         const mediaBuffer = Buffer.from(fileResponse.data);
         const cleanFileName = `${(ytData.title || songTitle).replace(/[\\/:*?"<>|]/g, '')}.mp3`;
 
-        // 1. Audio File (Play in chat)
         if (choice === '1') {
-          return await sock.sendMessage(jid, {
-            audio: mediaBuffer,
-            mimetype: 'audio/mpeg',
-            ptt: false
-          }, { quoted: msg });
-        }
-
-        // 2. Document File (Save to device)
-        if (choice === '2') {
-          return await sock.sendMessage(jid, {
-            document: mediaBuffer,
-            mimetype: 'audio/mpeg',
-            fileName: cleanFileName,
-            caption: `> *📥 ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴀᴜᴅɪᴏ ꜰɪʟᴇ*`
-          }, { quoted: msg });
-        }
-
-        // 3. Voice Note (PTT with waveform)
-        if (choice === '3') {
+          return await sock.sendMessage(jid, { audio: mediaBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
+        } else if (choice === '2') {
+          return await sock.sendMessage(jid, { document: mediaBuffer, mimetype: 'audio/mpeg', fileName: cleanFileName, caption: `> *📥 ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴀᴜᴅɪᴏ ꜰɪʟᴇ*` }, { quoted: msg });
+        } else if (choice === '3') {
           const tempDir = os.tmpdir();
           const tempInput = path.join(tempDir, `raw_${Date.now()}.bin`);
           const tempOutput = path.join(tempDir, `vn_${Date.now()}.ogg`);
-
           try {
             fs.writeFileSync(tempInput, mediaBuffer);
             await convertToOpus(tempInput, tempOutput);
             const audioSeconds = await getDuration(tempOutput);
-
             const dummyWaveform = new Uint8Array(64);
-            for (let i = 0; i < 64; i++) {
-              dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
-            }
-
-            const opusBuffer = fs.readFileSync(tempOutput);
+            for (let i = 0; i < 64; i++) dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
 
             return await sock.sendMessage(jid, {
-              audio: opusBuffer,
+              audio: fs.readFileSync(tempOutput),
               mimetype: 'audio/ogg; codecs=opus',
               ptt: true,
               seconds: audioSeconds,
@@ -185,19 +125,12 @@ module.exports = {
       }
 
       // ==========================================
-      // 2. SONG CARD GENERATOR
+      // 2. SONG CARD SENDER
       // ==========================================
       const query = args.join(' ').trim();
+      if (!query) return reply('⚠️ *Usage:* `.song <Song Name>`\n*Example:* `.song Lelena`');
 
-      if (!query || isNumberChoice) {
-        return await sock.sendMessage(jid, { 
-          text: `⚠️ *How to use:*\n\n• \`.song <Song Name>\`\n• Example: \`.song Lelena\`` 
-        }, { quoted: msg });
-      }
-
-      await sock.sendMessage(jid, { 
-        text: '⏳ *HESHAN OFC:* Searching YouTube track...' 
-      }, { quoted: msg });
+      await reply('⏳ *HESHAN OFC:* Searching YouTube track...');
 
       let targetYoutubeUrl = query;
       let searchedTitle = query;
@@ -206,14 +139,9 @@ module.exports = {
       let searchedAuthor = 'Unknown Artist';
 
       const isYoutubeUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(query);
-
       if (!isYoutubeUrl) {
         const searchResult = await yts(query);
-        if (!searchResult?.videos?.length) {
-          return await sock.sendMessage(jid, { 
-            text: '❌ *Song not found on YouTube.* Please check spelling.' 
-          }, { quoted: msg });
-        }
+        if (!searchResult?.videos?.length) return reply('❌ *Song not found on YouTube.*');
         const video = searchResult.videos[0];
         targetYoutubeUrl = video.url;
         searchedTitle = video.title;
@@ -240,7 +168,7 @@ module.exports = {
 ┃
 ╰━━━━━━━━━━━━━━━━━━━━━━╯
 
-➥ Reply with *1*, *2*, or *3* (or *.1*, *.2*, *.3*) to download!
+➥ Reply to this message with 1, 2, or 3 to download!
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴜsɪᴄ ʜᴜʙ*`;
 
@@ -250,10 +178,7 @@ module.exports = {
       }, { quoted: msg });
 
     } catch (error) {
-      console.error('Song Command Error:', error);
-      await sock.sendMessage(jid, { 
-        text: `❌ *An error occurred:* ${error.message}` 
-      }, { quoted: msg });
+      reply(`❌ *An error occurred:* ${error.message}`);
     }
   }
 };
