@@ -1,186 +1,182 @@
 const axios = require('axios');
 const yts = require('yt-search');
 
-// Default WhatsApp Channel Link
-const DEFAULT_CHANNEL = 'https://whatsapp.com/channel/0029VbAAjtcC1FuCIiYc8z3T';
-
-// Chamindu Active API Key
 const CHAMA_API_KEY = 'chama_api_9c55e3c6d014abbdf65054f9046a920b';
 
-/**
- * WhatsApp Channel JID Resolver (@newsletter)
- */
-async function resolveChannelJid(sock, channelInput) {
-  let input = channelInput.trim();
-  if (input.endsWith('@newsletter')) return input;
+// Quality Map
+const QUALITY_MAP = {
+  '1': '360p',
+  '2': '480p',
+  '3': '720p',
+  '4': '1080p'
+};
 
-  const match = input.match(/(?:https?:\/\/)?(?:www\.)?whatsapp\.com\/channel\/([a-zA-Z0-9]+)/i);
-  if (match && match[1]) {
-    const inviteCode = match[1];
-    if (typeof sock.newsletterMetadata === 'function') {
-      try {
-        const meta = await sock.newsletterMetadata('invite', inviteCode);
-        if (meta?.id) return meta.id;
-      } catch (e) {
-        console.error('Newsletter meta error:', e);
-      }
+async function fetchYouTubeVideoDownload(targetYoutubeUrl, quality = '720p') {
+  try {
+    const directUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=${quality}&format=mp4&api_key=${CHAMA_API_KEY}`;
+    const { data: res } = await axios.get(directUrl, { timeout: 45000 });
+    const dl = res?.download_url || res?.data?.download_url || res?.result?.download_url;
+    if (dl) {
+      return {
+        downloadUrl: dl,
+        title: res?.title || res?.data?.title || '',
+        quality: res?.quality || quality
+      };
     }
-    return `${inviteCode}@newsletter`;
-  }
-  return input;
-}
+  } catch (err) {}
 
-/**
- * Chamindu YouTube MP4 API
- */
-async function fetchYouTubeVideo(ytUrl) {
-  const qualities = ['1080p', '720p', '480p', '360p'];
-  for (const q of qualities) {
-    try {
-      const apiUrl = `https://api.chamindu.site/api/v1/youtube/mp4?url=${encodeURIComponent(ytUrl)}&quality=${q}&api_key=${CHAMA_API_KEY}`;
-      const { data: res } = await axios.get(apiUrl, { timeout: 35000 });
-
-      if (res?.status && res?.data?.download_url) {
-        return {
-          downloadUrl: res.data.download_url,
-          title: res.data.title || '',
-          quality: res.data.quality || q,
-          thumbnail: res.data.thumbnail || ''
-        };
-      }
-    } catch (e) {
-      console.warn(`YouTube ${q} fetch failed, checking lower resolution...`);
+  // Fallback Quality (720p -> 360p)
+  try {
+    const fallbackUrl = `https://api.chamindu.site/api/v1/youtube/download?url=${encodeURIComponent(targetYoutubeUrl)}&quality=360p&format=mp4&api_key=${CHAMA_API_KEY}`;
+    const { data: res2 } = await axios.get(fallbackUrl, { timeout: 45000 });
+    const dl2 = res2?.download_url || res2?.data?.download_url || res2?.result?.download_url;
+    if (dl2) {
+      return {
+        downloadUrl: dl2,
+        title: res2?.title || res2?.data?.title || '',
+        quality: '360p'
+      };
     }
-  }
+  } catch (e) {}
+
   return null;
 }
 
 module.exports = {
-  name: 'ytv',
-  alias: ['ytmp4', 'cytv', 'cytmp4', 'video'],
-  desc: 'Download YouTube video to chat or WhatsApp channel',
+  name: 'video',
+  alias: ['ytv', 'ytvideo', 'mp4'],
+  desc: 'Download YouTube video with quality selection',
   category: 'downloader',
-  run: async ({ sock, msg, jid, args, command }) => {
+  run: async ({ sock, msg, jid, args, text, reply }) => {
     try {
-      const messageText = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
-      const cmdUsed = (command || messageText.trim().split(/\s+/)[0].slice(1)).toLowerCase();
-      const isChannelCmd = cmdUsed === 'cytv' || cmdUsed === 'cytmp4';
+      const quotedMsg = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage;
+      const quotedCaption = quotedMsg?.imageMessage?.caption || 
+                            quotedMsg?.conversation || 
+                            quotedMsg?.extendedTextMessage?.text || '';
 
-      const quotedText = msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.conversation ||
-                         msg.message?.extendedTextMessage?.contextInfo?.quotedMessage?.extendedTextMessage?.text || '';
+      const isReply = ['1', '2', '3', '4'].includes(text?.trim());
+      const isVideoCard = quotedCaption.includes('H E S H A N   O F C   V I D E O') || quotedCaption.includes('SELECT QUALITY');
 
-      const fullText = args.join(' ').trim();
-      let destinationJid = jid;
-      let query = '';
+      // ==========================================
+      // 1. අංක 1, 2, 3, 4 REPLY කළ විට VIDEO එක එවීමේ කොටස
+      // ==========================================
+      if (isReply && isVideoCard) {
+        const choice = text.trim();
+        const selectedQuality = QUALITY_MAP[choice] || '720p';
 
-      if (isChannelCmd) {
-        if (fullText.includes(',')) {
-          const parts = fullText.split(',');
-          destinationJid = await resolveChannelJid(sock, parts[0].trim());
-          query = parts.slice(1).join(',').trim();
-        } else {
-          destinationJid = await resolveChannelJid(sock, DEFAULT_CHANNEL);
-          query = fullText || quotedText;
+        // Title එක Card Caption එකෙන් ලබාගැනීම
+        const titleMatch = quotedCaption.match(/TITLE\s*:\s*([^\n]+)/i);
+        const videoTitle = titleMatch ? titleMatch[1].trim() : 'Video';
+
+        // Processing Reaction
+        await sock.sendMessage(jid, { react: { text: '⏳', key: msg.key } });
+
+        const searchResult = await yts(videoTitle);
+        if (!searchResult?.videos?.length) {
+          await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
+          return;
         }
-      } else {
-        query = fullText || quotedText;
-      }
 
-      if (!query) {
-        return await sock.sendMessage(jid, {
-          text: isChannelCmd
-            ? `⚠️ *How to use:*\n\n• \`.${cmdUsed} <Song/Video Name or YouTube Link>\`\n• \`.${cmdUsed} <Channel Link>, <Song/Video Name or Link>\``
-            : `⚠️ *How to use:*\n\n• \`.ytv <Song/Video Name or YouTube Link>\`\n• Reply to a YouTube link with \`.ytv\``
+        const ytUrl = searchResult.videos[0].url;
+        const ytData = await fetchYouTubeVideoDownload(ytUrl, selectedQuality);
+
+        if (!ytData?.downloadUrl) {
+          await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
+          return;
+        }
+
+        // Buffer Stream Download
+        const fileResponse = await axios({
+          url: ytData.downloadUrl,
+          method: 'GET',
+          responseType: 'arraybuffer',
+          timeout: 180000,
+          headers: { 'User-Agent': 'Mozilla/5.0' }
+        });
+
+        const videoBuffer = Buffer.from(fileResponse.data);
+
+        // Video එක යැවීම
+        await sock.sendMessage(jid, {
+          video: videoBuffer,
+          mimetype: 'video/mp4',
+          caption: 
+`> *🎬⃝✨ H E S H A N   O F C   V I D E O*
+
+*❖ ᴛɪᴛʟᴇ :* ${ytData.title || videoTitle}
+*❖ ǫᴜᴀʟɪᴛʏ :* ${ytData.quality}
+
+> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`
         }, { quoted: msg });
+
+        // Success Reaction
+        return await sock.sendMessage(jid, { react: { text: '✅', key: msg.key } });
       }
 
-      await sock.sendMessage(jid, {
-        text: isChannelCmd
-          ? '⏳ *HESHAN OFC:* Processing YouTube video for channel...'
-          : '⏳ *HESHAN OFC:* Downloading YouTube video...'
-      }, { quoted: msg });
+      // ==========================================
+      // 2. .VIDEO විධානය දුන් විට CARD එක යැවීම
+      // ==========================================
+      const query = args.join(' ').trim();
+      if (!query) {
+        return reply('⚠️ *Usage:* `.video <Video Name or YouTube Link>`\n*Example:* `.video Lelena`');
+      }
+
+      // Initial Command Reaction (කිසිදු අනවශ්‍ය text එකක් නොයයි)
+      await sock.sendMessage(jid, { react: { text: '🎬', key: msg.key } });
 
       let targetYoutubeUrl = query;
       let searchedTitle = query;
-      let searchedDuration = 'N/A';
+      let searchedThumbnail = '';
+      let searchedDuration = '03:45';
+      let searchedAuthor = 'Unknown Channel';
 
       const isYoutubeUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(query);
 
-      // YouTube Link එකක් නොවේ නම් නමින් search කර link එක ලබා ගැනීම
       if (!isYoutubeUrl) {
         const searchResult = await yts(query);
         if (!searchResult?.videos?.length) {
-          return await sock.sendMessage(jid, { text: '❌ No results found on YouTube.' }, { quoted: msg });
+          await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
+          return reply('❌ *Video not found on YouTube.*');
         }
-        const firstVid = searchResult.videos[0];
-        targetYoutubeUrl = firstVid.url;
-        searchedTitle = firstVid.title;
-        searchedDuration = firstVid.timestamp || 'N/A';
+        const video = searchResult.videos[0];
+        targetYoutubeUrl = video.url;
+        searchedTitle = video.title;
+        searchedThumbnail = video.thumbnail;
+        searchedDuration = video.timestamp || '03:45';
+        searchedAuthor = video.author?.name || 'Unknown Channel';
       }
 
-      // API Call
-      const ytData = await fetchYouTubeVideo(targetYoutubeUrl);
+      const menuCaption = 
+`> *🎬⃝✨ H E S H A N   O F C   V I D E O*
 
-      if (!ytData?.downloadUrl) {
-        return await sock.sendMessage(jid, {
-          text: '❌ Failed to generate video download link. Video might be age-restricted or unavailable.'
-        }, { quoted: msg });
-      }
+*❖ TITLE :* ${searchedTitle}
+*❖ CHANNEL :* ${searchedAuthor}
+*❖ DURATION :* ${searchedDuration}
 
-      const finalTitle = (ytData.title || searchedTitle).replace(/[#@]/g, '').trim();
+01:23 ───🔘──────── ${searchedDuration}
+⇄     ◁   ❚❚   ▷     ↻
 
-      // Normal Chat Caption
-      const normalCaption =
-`> *🎬⃝✨ H E S H A N   O F C   Y O U T U B E*
+╭━━━〔 SELECT QUALITY 〕━━━╮
+┃
+┃ 1 ➯ 360p (Data Saver) 📱
+┃ 2 ➯ 480p (Standard) 🎬
+┃ 3 ➯ 720p (High Def) 🌟
+┃ 4 ➯ 1080p (Full HD) 🚀
+┃
+╰━━━━━━━━━━━━━━━━━━━━━━╯
 
-*❖ ᴛɪᴛʟᴇ :* ${finalTitle}
-*❖ ǫᴜᴀʟɪᴛʏ :* ${ytData.quality}
-*❖ ᴅᴜʀᴀᴛɪᴏɴ :* ${searchedDuration}
-
-\`\`\`➥ High speed stream generated successfully! 🍿✨\`\`\`
+➥ Reply to this message with 1, 2, 3, or 4 to download!
 
 > *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`;
 
-      // Channel Caption
-      const channelCaption = `${finalTitle}\n\n> *🕊️ ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴍᴇᴅɪᴀ ʜᴜʙ*`;
-
-      // Video Stream Buffer Download
-      const fileStream = await axios({
-        url: ytData.downloadUrl,
-        method: 'GET',
-        responseType: 'arraybuffer',
-        timeout: 180000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-        }
-      });
-
-      const videoBuffer = Buffer.from(fileStream.data);
-
-      if (isChannelCmd) {
-        // Channel එකට upload කිරීම
-        await sock.sendMessage(destinationJid, {
-          video: videoBuffer,
-          caption: channelCaption,
-          mimetype: 'video/mp4'
-        });
-
-        await sock.sendMessage(jid, {
-          text: `✅ *Success!* YouTube video uploaded to the channel.`
-        }, { quoted: msg });
-
-      } else {
-        // Chat එකට යැවීම
-        await sock.sendMessage(jid, {
-          video: videoBuffer,
-          caption: normalCaption,
-          mimetype: 'video/mp4'
-        }, { quoted: msg });
-      }
+      await sock.sendMessage(jid, {
+        image: { url: searchedThumbnail || 'https://i.imgur.com/8Q8ZQ8Z.png' },
+        caption: menuCaption
+      }, { quoted: msg });
 
     } catch (error) {
-      console.error('YouTube Downloader Error:', error);
-      await sock.sendMessage(jid, { text: `❌ An error occurred: ${error.message}` }, { quoted: msg });
+      console.error('Video Error:', error);
+      await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
     }
   }
 };
