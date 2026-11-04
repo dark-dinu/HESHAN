@@ -69,20 +69,27 @@ module.exports = {
       const isSongCard = quotedCaption.includes('H E S H A N   O F C   M U S I C') || quotedCaption.includes('SELECT FORMAT');
 
       // ==========================================
-      // 1. EXECUTE DOWNLOAD ON 1, 2, 3 REPLY
+      // 1. අංක 1, 2, 3 එබූ විට FILE එක පමණක් යැවීම
       // ==========================================
       if (isReply && isSongCard) {
         const choice = text.trim();
         const titleMatch = quotedCaption.match(/TITLE\s*:\s*([^\n]+)/i);
         const songTitle = titleMatch ? titleMatch[1].trim() : 'Song';
 
-        await reply(`⏳ *HESHAN OFC:* Fetching option *[${choice}]* for: *${songTitle}*...`);
+        // පරිශීලකයාගේ අංකයට React දැමීම (Processing indicator)
+        await sock.sendMessage(jid, { react: { text: '⏳', key: msg.key } });
 
         const searchResult = await yts(songTitle);
-        if (!searchResult?.videos?.length) return reply('❌ *Song link could not be re-resolved.*');
+        if (!searchResult?.videos?.length) {
+          await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
+          return;
+        }
 
         const ytData = await fetchYouTubeDownload(searchResult.videos[0].url);
-        if (!ytData?.downloadUrl) return reply('❌ *Failed to get download stream from YouTube API.*');
+        if (!ytData?.downloadUrl) {
+          await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
+          return;
+        }
 
         const fileResponse = await axios({
           url: ytData.downloadUrl,
@@ -95,11 +102,25 @@ module.exports = {
         const mediaBuffer = Buffer.from(fileResponse.data);
         const cleanFileName = `${(ytData.title || songTitle).replace(/[\\/:*?"<>|]/g, '')}.mp3`;
 
+        // 1. Audio File (Player)
         if (choice === '1') {
-          return await sock.sendMessage(jid, { audio: mediaBuffer, mimetype: 'audio/mpeg', ptt: false }, { quoted: msg });
-        } else if (choice === '2') {
-          return await sock.sendMessage(jid, { document: mediaBuffer, mimetype: 'audio/mpeg', fileName: cleanFileName, caption: `> *📥 ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴀᴜᴅɪᴏ ꜰɪʟᴇ*` }, { quoted: msg });
-        } else if (choice === '3') {
+          await sock.sendMessage(jid, { 
+            audio: mediaBuffer, 
+            mimetype: 'audio/mpeg', 
+            ptt: false 
+          }, { quoted: msg });
+        } 
+        // 2. Document File (Save File)
+        else if (choice === '2') {
+          await sock.sendMessage(jid, { 
+            document: mediaBuffer, 
+            mimetype: 'audio/mpeg', 
+            fileName: cleanFileName, 
+            caption: `> *📥 ʜᴇꜱʜᴀɴ ᴏꜰᴄ : ᴀᴜᴅɪᴏ ꜰɪʟᴇ*` 
+          }, { quoted: msg });
+        } 
+        // 3. Playable Voice Note (Opus PTT)
+        else if (choice === '3') {
           const tempDir = os.tmpdir();
           const tempInput = path.join(tempDir, `raw_${Date.now()}.bin`);
           const tempOutput = path.join(tempDir, `vn_${Date.now()}.ogg`);
@@ -110,7 +131,7 @@ module.exports = {
             const dummyWaveform = new Uint8Array(64);
             for (let i = 0; i < 64; i++) dummyWaveform[i] = Math.floor(Math.random() * 80) + 20;
 
-            return await sock.sendMessage(jid, {
+            await sock.sendMessage(jid, {
               audio: fs.readFileSync(tempOutput),
               mimetype: 'audio/ogg; codecs=opus',
               ptt: true,
@@ -122,15 +143,21 @@ module.exports = {
             if (fs.existsSync(tempOutput)) fs.unlinkSync(tempOutput);
           }
         }
+
+        // සාර්ථකව ගිය පසු Success Reaction එකක් දැමීම
+        return await sock.sendMessage(jid, { react: { text: '✅', key: msg.key } });
       }
 
       // ==========================================
-      // 2. SONG CARD SENDER
+      // 2. .SONG ගැසූ විට REACT වී කෙළින්ම CARD එක යැවීම
       // ==========================================
       const query = args.join(' ').trim();
-      if (!query) return reply('⚠️ *Usage:* `.song <Song Name>`\n*Example:* `.song Lelena`');
+      if (!query) {
+        return reply('⚠️ *Usage:* `.song <Song Name>`\n*Example:* `.song Lelena`');
+      }
 
-      await reply('⏳ *HESHAN OFC:* Searching YouTube track...');
+      // User ගේ .song කමාන්ඩ් මැසේජ් එකට React දැමීම (කිසිම text මැසේජ් එකක් නොයයි)
+      await sock.sendMessage(jid, { react: { text: '🎵', key: msg.key } });
 
       let targetYoutubeUrl = query;
       let searchedTitle = query;
@@ -141,7 +168,10 @@ module.exports = {
       const isYoutubeUrl = /^(https?:\/\/)?(www\.)?(youtube\.com|youtu\.be)\//i.test(query);
       if (!isYoutubeUrl) {
         const searchResult = await yts(query);
-        if (!searchResult?.videos?.length) return reply('❌ *Song not found on YouTube.*');
+        if (!searchResult?.videos?.length) {
+          await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
+          return reply('❌ *Song not found on YouTube.*');
+        }
         const video = searchResult.videos[0];
         targetYoutubeUrl = video.url;
         searchedTitle = video.title;
@@ -178,7 +208,8 @@ module.exports = {
       }, { quoted: msg });
 
     } catch (error) {
-      reply(`❌ *An error occurred:* ${error.message}`);
+      console.error('Song Error:', error);
+      await sock.sendMessage(jid, { react: { text: '❌', key: msg.key } });
     }
   }
 };
