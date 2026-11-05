@@ -14,7 +14,7 @@ const DEFAULT_SETTINGS = {
   fakePresence: 'off',      // 'typing', 'recording', 'off'
   antiSend: 'off',          // 'all', 'me', 'others', 'off'
   statusReactEmoji: '💖',
-  alwaysOnline: false       // true: Online, false: Offline (Hidden)
+  alwaysOnline: false
 };
 
 function getBotLogo() {
@@ -29,14 +29,14 @@ function getBotLogo() {
   return null;
 }
 
-// 🗄️ Database එකෙන් Settings ලබාගැනීම (Permanent Persistent Storage)
+// 🗄️ Database එකෙන් Settings කියවීම
 async function getBotSettings(db, sessionId) {
   if (!db || !db.bots) return { ...DEFAULT_SETTINGS };
   const data = await db.bots.findOne({ _id: sessionId });
   return Object.assign({}, DEFAULT_SETTINGS, data?.settings || {});
 }
 
-// 🗄️ Database එකට Settings Save කිරීම
+// 🗄️ Database එකට Settings ලිවීම
 async function saveBotSettings(db, sessionId, newSettings) {
   if (!db || !db.bots) return;
   await db.bots.updateOne(
@@ -46,7 +46,7 @@ async function saveBotSettings(db, sessionId, newSettings) {
   );
 }
 
-// UI Dashboard Card එක Build කිරීම
+// ඔයා දුන්න නිශ්චිත Layout එකෙන්ම Card එක Render කිරීම
 function buildSettingCard(sessionId, cfg) {
   const ad = cfg.antiDelete ? '🟢 ON' : '🔴 OFF';
   const av = cfg.antiViewOnce ? '🟢 ON' : '🔴 OFF';
@@ -166,18 +166,24 @@ function buildSettingCard(sessionId, cfg) {
 module.exports = {
   name: 'setting',
   alias: ['settings', 'config', 'cfg', 'set'],
-  desc: 'Interactive bot control dashboard with database persistence',
+  desc: 'Interactive configuration control center',
   category: 'system',
 
-  // Interactive Reply Handler
+  // Interactive Reply Receiver
   onReply: async ({ sock, msg, jid, text, quotedText, db }) => {
-    const isConfigCard = quotedText.includes('𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔  𝐂 𝐎 𝐍 𝐅 𝐈 𝐆');
+    // 🛠️ HESHAN - OFC හෝ CONFIG Card එකක්දැයි Exact Check කිරීම
+    const isConfigCard = 
+      quotedText.includes('𝐇𝐄𝐒𝐇𝐀𝐍') || 
+      quotedText.includes('HESHAN') || 
+      quotedText.includes('𝐂 𝐎 𝐍 𝐅 𝐈 𝐆') || 
+      quotedText.includes('ANTI - DELETE') ||
+      quotedText.includes('ALWAYS ONLINE');
+
     if (!isConfigCard) return false;
 
     const input = text.trim();
     const sessionId = (sock.user?.id || jid).split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
     
-    // DB එකෙන් පවතින settings ලබා ගැනීම
     const cfg = await getBotSettings(db, sessionId);
 
     let changed = false;
@@ -218,17 +224,17 @@ module.exports = {
       cfg.fakePresence = 'typing';
       changed = true;
       messageText = '🎭 *Fake Presence:* `✍️ ALWAYS TYPING`';
-      try { await sock.sendPresenceUpdate('composing'); } catch {}
+      try { await sock.sendPresenceUpdate('composing', jid); } catch {}
     } else if (input === '8.2') {
       cfg.fakePresence = 'recording';
       changed = true;
       messageText = '🎭 *Fake Presence:* `🎙️ ALWAYS RECORDING`';
-      try { await sock.sendPresenceUpdate('recording'); } catch {}
+      try { await sock.sendPresenceUpdate('recording', jid); } catch {}
     } else if (input === '8.3') {
       cfg.fakePresence = 'off';
       changed = true;
       messageText = '🎭 *Fake Presence:* `🛑 STOPPED (OFF)`';
-      try { await sock.sendPresenceUpdate('paused'); } catch {}
+      try { await sock.sendPresenceUpdate('paused', jid); } catch {}
     }
 
     // 9. Anti-Send Eraser
@@ -267,20 +273,20 @@ module.exports = {
 
     if (!changed) return false;
 
-    // 💾 වෙනස්කම් MongoDB එකේ ස්ථිරව සුරැකීම
+    // Database එකේ ස්ථිරව සුරැකීම
     await saveBotSettings(db, sessionId, cfg);
 
     await sock.sendMessage(jid, { react: { text: '⚡', key: msg.key } });
 
-    // තහවුරු කිරීමේ පණිවිඩය යැවීම
+    // තහවුරු කිරීමේ Card එක
     await sock.sendMessage(jid, {
-      text: `> *👑 𝐇𝐄𝐒𝐇𝐀𝐍 - 𝐎𝐅𝐂  𝐂 𝐎 𝐍 𝐅 𝐈 𝐆*\n\n✅ *Configuration Saved to Database:*\n${messageText}\n\n\`\`\`Type .setting to view updated dashboard.\`\`\``
+      text: `> *🛠️ 𝐇𝐄𝐒𝐇𝐀𝐍 - 𝐎𝐅𝐂 𝐂 𝐎 𝐍 𝐅 𝐈 𝐆*\n\n✅ *Configuration Updated:*\n${messageText}\n\n\`\`\`Type .setting to view dashboard.\`\`\``
     }, { quoted: msg });
 
     return true;
   },
 
-  // .setting Command එක ක්‍රියාත්මක කිරීම
+  // .setting Command Entry
   run: async ({ sock, msg, jid, db }) => {
     try {
       await sock.sendMessage(jid, { react: { text: '⚙️', key: msg.key } });
