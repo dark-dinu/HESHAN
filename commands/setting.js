@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const process = require('process');
 
-// Default configurations helper
+// Default Configurations
 const DEFAULT_SETTINGS = {
   antiDelete: true,
   antiViewOnce: true,
@@ -13,20 +13,9 @@ const DEFAULT_SETTINGS = {
   statusReact: true,
   fakePresence: 'off',      // 'typing', 'recording', 'off'
   antiSend: 'off',          // 'all', 'me', 'others', 'off'
-  statusReactEmoji: '💖'
+  statusReactEmoji: '💖',
+  alwaysOnline: false       // true: Online, false: Offline (Hidden)
 };
-
-// In-memory / Global settings store (Per Bot Session ID)
-if (!global.botSettingsMap) {
-  global.botSettingsMap = new Map();
-}
-
-function getSettings(sessionId) {
-  if (!global.botSettingsMap.has(sessionId)) {
-    global.botSettingsMap.set(sessionId, { ...DEFAULT_SETTINGS });
-  }
-  return global.botSettingsMap.get(sessionId);
-}
 
 function getBotLogo() {
   const possiblePaths = [
@@ -40,6 +29,24 @@ function getBotLogo() {
   return null;
 }
 
+// 🗄️ Database එකෙන් Settings ලබාගැනීම (Permanent Persistent Storage)
+async function getBotSettings(db, sessionId) {
+  if (!db || !db.bots) return { ...DEFAULT_SETTINGS };
+  const data = await db.bots.findOne({ _id: sessionId });
+  return Object.assign({}, DEFAULT_SETTINGS, data?.settings || {});
+}
+
+// 🗄️ Database එකට Settings Save කිරීම
+async function saveBotSettings(db, sessionId, newSettings) {
+  if (!db || !db.bots) return;
+  await db.bots.updateOne(
+    { _id: sessionId },
+    { $set: { settings: newSettings } },
+    { upsert: true }
+  );
+}
+
+// UI Dashboard Card එක Build කිරීම
 function buildSettingCard(sessionId, cfg) {
   const ad = cfg.antiDelete ? '🟢 ON' : '🔴 OFF';
   const av = cfg.antiViewOnce ? '🟢 ON' : '🔴 OFF';
@@ -48,6 +55,7 @@ function buildSettingCard(sessionId, cfg) {
   const ac = cfg.antiCall ? '🟢 ON' : '🔴 OFF';
   const ss = cfg.statusSeen ? '🟢 ON' : '🔴 OFF';
   const sr = cfg.statusReact ? '🟢 ON' : '🔴 OFF';
+  const ao = cfg.alwaysOnline ? '🟢 ALWAYS ONLINE' : '🔴 HIDDEN (OFFLINE)';
   
   let fp = '🔴 OFF';
   if (cfg.fakePresence === 'typing') fp = '✍️ ALWAYS TYPING';
@@ -59,7 +67,7 @@ function buildSettingCard(sessionId, cfg) {
   if (cfg.antiSend === 'others') as = '👥 OTHERS MESSAGES';
 
   return `╔═════════════════════════════╗
-   🚀 𝐇𝐄𝐒𝐇𝐀𝐍 𝐎𝐅𝐂 -  𝐂 𝐎 𝐍 𝐅 𝐈 𝐆
+   🛠️ 𝐇𝐄𝐒𝐇𝐀𝐍 - 𝐎𝐅𝐂 𝐂 𝐎 𝐍 𝐅 𝐈 𝐆
 ╚═════════════════════════════╝
 
 📱 *Session ID:* \`+${sessionId}\`
@@ -144,88 +152,97 @@ function buildSettingCard(sessionId, cfg) {
 │ [ 10.6 ] ➕ Custom (Reply \`10.6 <emoji>\`)
 ╰─────────────────────────────
 
+╭───〔 11. 🟢 𝐀𝐋𝐖𝐀𝐘𝐒 𝐎𝐍𝐋𝐈𝐍𝐄 〕
+├ 📌 *Current:* \`${ao}\`
+│
+│ [ 11.1 ] 🟢 Always Online ON
+│ [ 11.2 ] 🔴 Always Offline (Hidden)
+╰─────────────────────────────
+
 > 💡 *Reply with the option number to update setting.*
-> *(Example: 1.1 or 3.1 or 4.2)*`;
+> *(Example: 1.1 or 3.1 or 11.1)*`;
 }
 
 module.exports = {
   name: 'setting',
   alias: ['settings', 'config', 'cfg', 'set'],
-  desc: 'Comprehensive interactive bot control dashboard',
+  desc: 'Interactive bot control dashboard with database persistence',
   category: 'system',
 
   // Interactive Reply Handler
-  onReply: async ({ sock, msg, jid, text, quotedText }) => {
+  onReply: async ({ sock, msg, jid, text, quotedText, db }) => {
     const isConfigCard = quotedText.includes('𝐃 𝐀 𝐑 𝐊 - 𝐃 𝐈 𝐍 𝐔  𝐂 𝐎 𝐍 𝐅 𝐈 𝐆');
     if (!isConfigCard) return false;
 
     const input = text.trim();
     const sessionId = (sock.user?.id || jid).split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-    const cfg = getSettings(sessionId);
+    
+    // DB එකෙන් පවතින settings ලබා ගැනීම
+    const cfg = await getBotSettings(db, sessionId);
 
     let changed = false;
     let messageText = '';
 
     // 1. Anti-Delete
-    if (input === '1.1') { cfg.antiDelete = true; changed = true; messageText = '🗑️ *Anti-Delete:* \`ENABLED 🟢\`'; }
-    else if (input === '1.2') { cfg.antiDelete = false; changed = true; messageText = '🗑️ *Anti-Delete:* \`DISABLED 🔴\`'; }
+    if (input === '1.1') { cfg.antiDelete = true; changed = true; messageText = '🗑️ *Anti-Delete:* `ENABLED 🟢`'; }
+    else if (input === '1.2') { cfg.antiDelete = false; changed = true; messageText = '🗑️ *Anti-Delete:* `DISABLED 🔴`'; }
 
     // 2. Anti-ViewOnce
-    else if (input === '2.1') { cfg.antiViewOnce = true; changed = true; messageText = '👁️‍🗨️ *Anti-ViewOnce:* \`ENABLED 🟢\`'; }
-    else if (input === '2.2') { cfg.antiViewOnce = false; changed = true; messageText = '👁️‍🗨️ *Anti-ViewOnce:* \`DISABLED 🔴\`'; }
+    else if (input === '2.1') { cfg.antiViewOnce = true; changed = true; messageText = '👁️‍🗨️ *Anti-ViewOnce:* `ENABLED 🟢`'; }
+    else if (input === '2.2') { cfg.antiViewOnce = false; changed = true; messageText = '👁️‍🗨️ *Anti-ViewOnce:* `DISABLED 🔴`'; }
 
     // 3. Send Destination
-    else if (input === '3.1') { cfg.sendDestination = 'inbox'; changed = true; messageText = '🎯 *Destination Target:* \`📥 INBOX (DM ONLY)\`'; }
-    else if (input === '3.2') { cfg.sendDestination = 'chat'; changed = true; messageText = '🎯 *Destination Target:* \`💬 CURRENT CHAT\`'; }
+    else if (input === '3.1') { cfg.sendDestination = 'inbox'; changed = true; messageText = '🎯 *Destination Target:* `📥 INBOX (DM ONLY)`'; }
+    else if (input === '3.2') { cfg.sendDestination = 'chat'; changed = true; messageText = '🎯 *Destination Target:* `💬 CURRENT CHAT`'; }
 
     // 4. Work Type
-    else if (input === '4.1') { cfg.workType = 'public'; changed = true; messageText = '🌐 *Work Type:* \`PUBLIC (Everyone)\`'; }
-    else if (input === '4.2') { cfg.workType = 'private'; changed = true; messageText = '🔒 *Work Type:* \`PRIVATE (Owner Only)\`'; }
-    else if (input === '4.3') { cfg.workType = 'group'; changed = true; messageText = '👥 *Work Type:* \`GROUPS ONLY\`'; }
-    else if (input === '4.4') { cfg.workType = 'inbox'; changed = true; messageText = '💬 *Work Type:* \`INBOX ONLY\`'; }
+    else if (input === '4.1') { cfg.workType = 'public'; changed = true; messageText = '🌐 *Work Type:* `PUBLIC (Everyone)`'; }
+    else if (input === '4.2') { cfg.workType = 'private'; changed = true; messageText = '🔒 *Work Type:* `PRIVATE (Owner Only)`'; }
+    else if (input === '4.3') { cfg.workType = 'group'; changed = true; messageText = '👥 *Work Type:* `GROUPS ONLY`'; }
+    else if (input === '4.4') { cfg.workType = 'inbox'; changed = true; messageText = '💬 *Work Type:* `INBOX ONLY`'; }
 
     // 5. Anti-Call
-    else if (input === '5.1') { cfg.antiCall = true; changed = true; messageText = '📵 *Auto-Reject Calls:* \`ENABLED 🟢\`'; }
-    else if (input === '5.2') { cfg.antiCall = false; changed = true; messageText = '📵 *Auto-Reject Calls:* \`DISABLED 🔴\`'; }
+    else if (input === '5.1') { cfg.antiCall = true; changed = true; messageText = '📵 *Auto-Reject Calls:* `ENABLED 🟢`'; }
+    else if (input === '5.2') { cfg.antiCall = false; changed = true; messageText = '📵 *Auto-Reject Calls:* `DISABLED 🔴`'; }
 
     // 6. Status Seen
-    else if (input === '6.1') { cfg.statusSeen = true; changed = true; messageText = '👁️ *Status Auto-Seen:* \`ENABLED 🟢\`'; }
-    else if (input === '6.2') { cfg.statusSeen = false; changed = true; messageText = '👁️ *Status Auto-Seen:* \`DISABLED 🔴\`'; }
+    else if (input === '6.1') { cfg.statusSeen = true; changed = true; messageText = '👁️ *Status Auto-Seen:* `ENABLED 🟢`'; }
+    else if (input === '6.2') { cfg.statusSeen = false; changed = true; messageText = '👁️ *Status Auto-Seen:* `DISABLED 🔴`'; }
 
     // 7. Status React
-    else if (input === '7.1') { cfg.statusReact = true; changed = true; messageText = '💖 *Status Auto-React:* \`ENABLED 🟢\`'; }
-    else if (input === '7.2') { cfg.statusReact = false; changed = true; messageText = '💖 *Status Auto-React:* \`DISABLED 🔴\`'; }
+    else if (input === '7.1') { cfg.statusReact = true; changed = true; messageText = '💖 *Status Auto-React:* `ENABLED 🟢`'; }
+    else if (input === '7.2') { cfg.statusReact = false; changed = true; messageText = '💖 *Status Auto-React:* `DISABLED 🔴`'; }
 
     // 8. Fake Presence
     else if (input === '8.1') {
       cfg.fakePresence = 'typing';
       changed = true;
-      messageText = '🎭 *Fake Presence:* \`✍️ ALWAYS TYPING\`';
+      messageText = '🎭 *Fake Presence:* `✍️ ALWAYS TYPING`';
       try { await sock.sendPresenceUpdate('composing'); } catch {}
     } else if (input === '8.2') {
       cfg.fakePresence = 'recording';
       changed = true;
-      messageText = '🎭 *Fake Presence:* \`🎙️ ALWAYS RECORDING\`';
+      messageText = '🎭 *Fake Presence:* `🎙️ ALWAYS RECORDING`';
       try { await sock.sendPresenceUpdate('recording'); } catch {}
     } else if (input === '8.3') {
       cfg.fakePresence = 'off';
       changed = true;
-      messageText = '🎭 *Fake Presence:* \`🛑 STOPPED (OFF)\`';
+      messageText = '🎭 *Fake Presence:* `🛑 STOPPED (OFF)`';
       try { await sock.sendPresenceUpdate('paused'); } catch {}
     }
 
     // 9. Anti-Send Eraser
-    else if (input === '9.1') { cfg.antiSend = 'all'; changed = true; messageText = '🚫 *Anti-Send:* \`💥 ALL MESSAGES ERASED\`'; }
-    else if (input === '9.2') { cfg.antiSend = 'me'; changed = true; messageText = '🚫 *Anti-Send:* \`👤 ERASE MY MESSAGES ONLY\`'; }
-    else if (input === '9.3') { cfg.antiSend = 'others'; changed = true; messageText = '🚫 *Anti-Send:* \`👥 ERASE OTHERS MESSAGES\`'; }
-    else if (input === '9.4') { cfg.antiSend = 'off'; changed = true; messageText = '🚫 *Anti-Send:* \`🛑 DISABLED (OFF)\`'; }
+    else if (input === '9.1') { cfg.antiSend = 'all'; changed = true; messageText = '🚫 *Anti-Send:* `💥 ALL MESSAGES ERASED`'; }
+    else if (input === '9.2') { cfg.antiSend = 'me'; changed = true; messageText = '🚫 *Anti-Send:* `👤 ERASE MY MESSAGES ONLY`'; }
+    else if (input === '9.3') { cfg.antiSend = 'others'; changed = true; messageText = '🚫 *Anti-Send:* `👥 ERASE OTHERS MESSAGES`'; }
+    else if (input === '9.4') { cfg.antiSend = 'off'; changed = true; messageText = '🚫 *Anti-Send:* `🛑 DISABLED (OFF)`'; }
 
     // 10. Status React Emoji
-    else if (input === '10.1') { cfg.statusReactEmoji = '💖'; changed = true; messageText = '💖 *Status Reaction Emoji:* \`💖\`'; }
-    else if (input === '10.2') { cfg.statusReactEmoji = '✨'; changed = true; messageText = '💖 *Status Reaction Emoji:* \`✨\`'; }
-    else if (input === '10.3') { cfg.statusReactEmoji = '🔥'; changed = true; messageText = '💖 *Status Reaction Emoji:* \`🔥\`'; }
-    else if (input === '10.4') { cfg.statusReactEmoji = '⚡'; changed = true; messageText = '💖 *Status Reaction Emoji:* \`⚡\`'; }
-    else if (input === '10.5') { cfg.statusReactEmoji = '🥀'; changed = true; messageText = '💖 *Status Reaction Emoji:* \`🥀\`'; }
+    else if (input === '10.1') { cfg.statusReactEmoji = '💖'; changed = true; messageText = '💖 *Status Reaction Emoji:* `💖`'; }
+    else if (input === '10.2') { cfg.statusReactEmoji = '✨'; changed = true; messageText = '💖 *Status Reaction Emoji:* `✨`'; }
+    else if (input === '10.3') { cfg.statusReactEmoji = '🔥'; changed = true; messageText = '💖 *Status Reaction Emoji:* `🔥`'; }
+    else if (input === '10.4') { cfg.statusReactEmoji = '⚡'; changed = true; messageText = '💖 *Status Reaction Emoji:* `⚡`'; }
+    else if (input === '10.5') { cfg.statusReactEmoji = '🥀'; changed = true; messageText = '💖 *Status Reaction Emoji:* `🥀`'; }
     else if (input.startsWith('10.6')) {
       const customEmoji = input.replace('10.6', '').trim();
       if (customEmoji) {
@@ -235,25 +252,41 @@ module.exports = {
       }
     }
 
+    // 11. Always Online / Offline
+    else if (input === '11.1') {
+      cfg.alwaysOnline = true;
+      changed = true;
+      messageText = '🟢 *Always Online:* `ENABLED 🟢`';
+      try { await sock.sendPresenceUpdate('available'); } catch {}
+    } else if (input === '11.2') {
+      cfg.alwaysOnline = false;
+      changed = true;
+      messageText = '🔴 *Always Online:* `DISABLED (OFFLINE) 🔴`';
+      try { await sock.sendPresenceUpdate('unavailable'); } catch {}
+    }
+
     if (!changed) return false;
+
+    // 💾 වෙනස්කම් MongoDB එකේ ස්ථිරව සුරැකීම
+    await saveBotSettings(db, sessionId, cfg);
 
     await sock.sendMessage(jid, { react: { text: '⚡', key: msg.key } });
 
-    // Send confirmation
+    // තහවුරු කිරීමේ පණිවිඩය යැවීම
     await sock.sendMessage(jid, {
-      text: `> *⚡ 𝐇 𝐄 𝐒 𝐇 𝐀 𝐍 - 𝐎𝐅𝐂  𝐂 𝐎 𝐍 𝐅 𝐈 𝐆*\n\n✅ *Successfully Updated:*\n${messageText}\n\n\`\`\`Type .setting to view dashboard.\`\`\``
+      text: `> *👑 𝐇𝐄𝐒𝐇𝐀𝐍 - 𝐎𝐅𝐂  𝐂 𝐎 𝐍 𝐅 𝐈 𝐆*\n\n✅ *Configuration Saved to Database:*\n${messageText}\n\n\`\`\`Type .setting to view updated dashboard.\`\`\``
     }, { quoted: msg });
 
     return true;
   },
 
-  // .setting Command Execution
-  run: async ({ sock, msg, jid }) => {
+  // .setting Command එක ක්‍රියාත්මක කිරීම
+  run: async ({ sock, msg, jid, db }) => {
     try {
       await sock.sendMessage(jid, { react: { text: '⚙️', key: msg.key } });
 
       const sessionId = (sock.user?.id || jid).split('@')[0].split(':')[0].replace(/[^0-9]/g, '');
-      const cfg = getSettings(sessionId);
+      const cfg = await getBotSettings(db, sessionId);
 
       const logoBuffer = getBotLogo();
       const cardCaption = buildSettingCard(sessionId, cfg);
